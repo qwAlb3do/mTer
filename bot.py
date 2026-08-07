@@ -177,7 +177,7 @@ def wait_for_local_bot_api() -> None:
 
 def main() -> None:
     configure_logging()
-    print(ascii_banner())
+    logging.getLogger(__name__).info(ascii_banner())
     try:
         wait_for_local_bot_api()
         build_application().run_polling(

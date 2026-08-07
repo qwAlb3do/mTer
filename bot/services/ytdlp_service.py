@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import httpx
 import logging
 import os
 import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -70,6 +72,7 @@ class DownloadResult:
     path: Path
     title: str
     kind: str
+    thumbnail: Path | None = None
 
 
 class YTDLPService:
@@ -238,6 +241,45 @@ class YTDLPService:
             return f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
 
         return None
+
+    @staticmethod
+    def _download_remote_thumbnail(url: str, target: Path) -> bool:
+        try:
+            response = httpx.get(url, timeout=20.0)
+            if response.status_code == 200 and response.content:
+                target.write_bytes(response.content)
+                return True
+        except Exception as exc:
+            logger.debug("Could not download remote thumbnail: %s", exc)
+        return False
+
+    @staticmethod
+    def _create_thumbnail_from_video(source: Path, target: Path) -> bool:
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-ss",
+                    "00:00:03",
+                    "-i",
+                    str(source),
+                    "-frames:v",
+                    "1",
+                    "-q:v",
+                    "2",
+                    str(target),
+                ],
+                check=True,
+            )
+            return target.is_file()
+        except Exception as exc:
+            logger.debug("Could not generate video thumbnail from %s: %s", source, exc)
+            return False
 
     async def inspect(self, url: str) -> MediaInfo:
         async with self._semaphore:
@@ -483,10 +525,20 @@ class YTDLPService:
                     f"bot limit is {settings.max_upload_bytes / 1_000_000:.1f} MB."
                 )
 
+            thumbnail_path = None
+            if option.kind == "video":
+                remote_thumb = self._thumbnail(info)
+                candidate = job_dir / "thumbnail.jpg"
+                if remote_thumb and self._download_remote_thumbnail(remote_thumb, candidate):
+                    thumbnail_path = candidate
+                elif self._create_thumbnail_from_video(path, candidate):
+                    thumbnail_path = candidate
+
             return DownloadResult(
                 path=path,
                 title=info.get("title") or path.stem,
                 kind=option.kind,
+                thumbnail=thumbnail_path,
             )
         except (DownloadError, FileTooLargeError):
             logger.warning("Media download failed; cleaning job directory: %s", job_dir)

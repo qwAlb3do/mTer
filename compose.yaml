@@ -5,12 +5,12 @@ services:
       - sh
       - -c
       - >-
-        chown -R ${BOT_UID:-1000}:${BOT_GID:-1000}
-        /shared/videos /app/database /app/logs
+        mkdir -p /shared/videos /app/database /app/logs && \
+        chown -R ${BOT_UID:-1000}:${BOT_GID:-1000} /shared/videos /app/database /app/logs
     volumes:
-      - shared-videos:/shared/videos
-      - bot-database:/app/database
-      - bot-logs:/app/logs
+      - ./shared/videos:/shared/videos
+      - ./database:/app/database
+      - ./logs:/app/logs
     restart: "no"
 
   telegram-bot-api:
@@ -21,7 +21,7 @@ services:
       TELEGRAM_LOCAL: "1"
     volumes:
       - telegram-bot-api-data:/var/lib/telegram-bot-api
-      - shared-videos:/shared/videos:ro
+      - ./shared/videos:/shared/videos:ro
     networks:
       - bot-network
     depends_on:
@@ -54,9 +54,9 @@ services:
       YTDLP_COOKIES_FILE: /run/secrets/youtube-cookies.txt
       YTDLP_JS_RUNTIMES: node:/usr/bin/node
     volumes:
-      - shared-videos:/shared/videos
-      - bot-database:/app/database
-      - bot-logs:/app/logs
+      - ./shared/videos:/shared/videos
+      - ./database:/app/database
+      - ./logs:/app/logs
       - telegram-bot-api-data:/var/lib/telegram-bot-api:ro
       - ./secrets:/run/secrets:ro
     networks:
@@ -73,7 +73,4 @@ networks:
     driver: bridge
 
 volumes:
-  shared-videos:
-  bot-database:
-  bot-logs:
   telegram-bot-api-data:

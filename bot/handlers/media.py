@@ -858,6 +858,11 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 write_timeout=settings.telegram_write_timeout,
             )
         else:
+            thumb_path = (
+                local_file_path(result.thumbnail)
+                if result.thumbnail is not None
+                else None
+            )
             sent = await query.message.reply_video(
                 video=upload_path,
                 filename=result.path.name,
@@ -865,6 +870,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 duration=info.duration,
                 height=option.height,
                 supports_streaming=True,
+                thumb=thumb_path,
                 read_timeout=settings.telegram_read_timeout,
                 write_timeout=settings.telegram_write_timeout,
             )

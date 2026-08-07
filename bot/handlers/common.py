@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
-import sys
 import time
 from functools import wraps
 from typing import Awaitable, Callable
@@ -179,8 +177,10 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 @registered
 @owner_only
 async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.effective_message.reply_text("Restarting bot process…")
-    os.execv(sys.executable, [sys.executable, *sys.argv])
+    await update.effective_message.reply_text(
+        "Restarting bot process… If the container restart policy is enabled, the service will come back up."
+    )
+    context.application.stop_running()
 
 
 @registered
