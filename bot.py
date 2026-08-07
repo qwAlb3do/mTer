@@ -5,7 +5,7 @@ import time
 
 import httpx
 from telegram import BotCommand, BotCommandScopeChat
-from telegram.error import Conflict
+from telegram.error import BadRequest, Conflict
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -69,13 +69,19 @@ async def post_init(application: Application) -> None:
         BotCommand("ping", "Check website latency"),
     ]
     await application.bot.set_my_commands(public_commands)
-    await application.bot.set_my_commands([
-        *public_commands,
-        BotCommand("jobs", "Owner: show active jobs"),
-        BotCommand("broadcast", "Owner: message all users"),
-        BotCommand("restart", "Owner: restart the bot"),
-        BotCommand("stop", "Stop the bot"),
-    ], scope=BotCommandScopeChat(chat_id=settings.owner_id))
+    try:
+        await application.bot.set_my_commands([
+            *public_commands,
+            BotCommand("jobs", "Owner: show active jobs"),
+            BotCommand("broadcast", "Owner: message all users"),
+            BotCommand("restart", "Owner: restart the bot"),
+            BotCommand("stop", "Stop the bot"),
+        ], scope=BotCommandScopeChat(chat_id=settings.owner_id))
+    except BadRequest as exc:
+        logging.getLogger(__name__).warning(
+            "Could not set owner-scoped commands: %s. Owner chat may not be accessible yet.",
+            exc,
+        )
 
 
 def build_application() -> Application:
