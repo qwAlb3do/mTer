@@ -1,0 +1,10 @@
+python-telegram-bot==22.7
+httpx>=0.28,<1
+Pillow>=10,<12
+yt-dlp>=2026.6.0
+spotdl>=4.4,<5
+spotipy>=2.23,<3
+spotipy-anon>=1.5,<2
+pydantic-settings>=2.7,<3
+python-dotenv>=1.0,<2
+shazamio>=0.8,<1
