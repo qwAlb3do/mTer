@@ -1,12 +1,7 @@
 services:
   volume-init:
     image: alpine:3.22
-    command:
-      - sh
-      - -c
-      - >-
-        mkdir -p /shared/videos /app/database /app/logs && \
-        chown -R ${BOT_UID:-1000}:${BOT_GID:-1000} /shared/videos /app/database /app/logs
+    command: sh -c 'mkdir -p /shared/videos /app/database /app/logs && chown -R ${BOT_UID:-1000}:${BOT_GID:-1000} /shared/videos /app/database /app/logs'
     volumes:
       - ./shared/videos:/shared/videos
       - ./database:/app/database
