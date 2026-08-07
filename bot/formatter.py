@@ -236,8 +236,11 @@ async def send_sticker(message: Message, kind: str) -> None:
     chat_id = getattr(message.chat, "id", None) or getattr(message, "chat_id", None)
     if chat_id is None:
         return
+    bot = getattr(message, "bot", None) or getattr(message, "_bot", None)
+    if bot is None:
+        return
     try:
-        await message.bot.send_sticker(chat_id=chat_id, sticker=sticker_id)
+        await bot.send_sticker(chat_id=chat_id, sticker=sticker_id)
     except TelegramError:
         logger.debug(
             "Could not send fallback sticker %s to chat %s.",
