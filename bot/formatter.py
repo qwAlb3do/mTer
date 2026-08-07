@@ -6,11 +6,13 @@ from urllib.parse import quote_plus
 from dataclasses import dataclass
 from typing import Iterable
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message, ReactionTypeEmoji, Update
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Message, ReactionTypeEmoji, Update
 from telegram.error import TelegramError
 
 from bot.config import settings
+import logging
 
+logger = logging.getLogger(__name__)
 
 @dataclass(slots=True)
 class Panel:
@@ -218,7 +220,7 @@ async def react_to_user(update: Update, kind: str) -> None:
         pass
 
 
-async def send_sticker(message: Message, kind: str) -> None:
+async def send_sticker(message: Message, kind: str, bot: Bot | None = None) -> None:
     sticker_id = {
         "download": settings.downloading_sticker_id,
         "music": settings.analyzing_sticker_id,
@@ -231,22 +233,25 @@ async def send_sticker(message: Message, kind: str) -> None:
     try:
         await message.reply_sticker(sticker_id)
         return
-    except TelegramError:
-        pass
+    except TelegramError as exc:
+        logger.warning("reply_sticker failed for %s: %s", kind, exc)
+
     chat_id = getattr(message.chat, "id", None) or getattr(message, "chat_id", None)
     if chat_id is None:
+        logger.warning("Could not determine chat_id for sticker fallback: %s", kind)
         return
-    bot = getattr(message, "bot", None) or getattr(message, "_bot", None)
+    bot = bot or getattr(message, "bot", None) or getattr(message, "_bot", None)
     if bot is None:
+        logger.warning("Could not find bot instance for sticker fallback: %s", kind)
         return
     try:
         await bot.send_sticker(chat_id=chat_id, sticker=sticker_id)
-    except TelegramError:
-        logger.debug(
-            "Could not send fallback sticker %s to chat %s.",
+    except TelegramError as exc:
+        logger.warning(
+            "Could not send fallback sticker %s to chat %s: %s",
             kind,
             chat_id,
-            exc_info=True,
+            exc,
         )
 
 

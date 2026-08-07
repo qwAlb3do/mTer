@@ -201,7 +201,11 @@ async def _acquire_download_guard(
     message: str = "Finish your current task first.",
 ) -> bool:
     if not await download_guard.acquire(user_id):
-        await query.answer(message, show_alert=True)
+        answer = getattr(query, "answer", None)
+        if callable(answer):
+            await answer(message, show_alert=True)
+        elif getattr(query, "reply_text", None):
+            await query.reply_text(message)
         return False
     return True
 
@@ -752,7 +756,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
 
     await react_to_user(update, "download")
-    await send_sticker(query.message, "download")
+    await send_sticker(query.message, "download", context.bot)
     job_token = token_urlsafe(8)
     cancel_event = asyncio.Event()
     context.bot_data.setdefault("download_jobs", {})[job_token] = {
@@ -858,7 +862,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 write_timeout=settings.telegram_write_timeout,
             )
         else:
-            thumb_path = (
+            thumbnail_path = (
                 local_file_path(result.thumbnail)
                 if result.thumbnail is not None
                 else None
@@ -870,7 +874,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 duration=info.duration,
                 height=option.height,
                 supports_streaming=True,
-                thumb=thumb_path,
+                thumbnail=thumbnail_path,
                 read_timeout=settings.telegram_read_timeout,
                 write_timeout=settings.telegram_write_timeout,
             )
@@ -904,7 +908,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         if _job_cancelled(context, job_token):
             await progress_message.edit_text("🛑 Download cancelled.")
         else:
-            await send_sticker(query.message, "error")
+            await send_sticker(query.message, "error", context.bot)
             await _safe_edit_text(
                 progress_message,
                 f"<b>⚠️ Download failed</b>\n\n{escape(str(exc))}",

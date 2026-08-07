@@ -93,7 +93,7 @@ async def music_yes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     result = None
     prepare_message = None
     try:
-        await send_sticker(query.message, "music")
+        await send_sticker(query.message, "music", context.bot)
         await query.edit_message_text("Downloading the sample for analysis…")
         telegram_file = await context.bot.get_file(session["file_id"])
         ext = ".bin"
@@ -159,9 +159,9 @@ async def music_yes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             f"{track.artist} - {track.title}",
         )
         await react_to_user(update, "success")
-        await send_sticker(query.message, "success")
+        await send_sticker(query.message, "success", context.bot)
     except (DownloadError, FileTooLargeError):
-        await send_sticker(query.message, "error")
+        await send_sticker(query.message, "error", context.bot)
         if prepare_message:
             try:
                 await prepare_message.delete()

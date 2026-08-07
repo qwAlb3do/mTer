@@ -91,7 +91,7 @@ def registered(handler: Handler) -> Handler:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     await react_to_user(update, "welcome")
-    await send_sticker(message, "welcome")
+    await send_sticker(message, "welcome", context.bot)
 
     await message.reply_text(
         "<b>⚡ Welcome to the media downloader.</b>\n\n"
