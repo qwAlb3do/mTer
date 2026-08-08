@@ -23,7 +23,7 @@ from bot.config import (
 
 logger = logging.getLogger(__name__)
 
-STICKER_FALLBACKS = {
+GENERATED_STICKER_STYLES = {
     "welcome": DEFAULT_WELCOME_STICKER_ID,
     "download": DEFAULT_DOWNLOADING_STICKER_ID,
     "music": DEFAULT_ANALYZING_STICKER_ID,
@@ -31,13 +31,13 @@ STICKER_FALLBACKS = {
     "error": DEFAULT_ERROR_STICKER_ID,
 }
 
-GENERATED_STICKER_STYLES = {
-    "welcome": ("WELCOME", "Ready for links", "#2563EB"),
-    "download": ("DOWNLOADING", "Please wait", "#D97706"),
-    "music": ("ANALYZING", "Finding the track", "#7C3AED"),
-    "success": ("COMPLETE", "Transfer delivered", "#059669"),
-    "error": ("FAILED", "Please try again", "#DC2626"),
-}
+# GENERATED_STICKER_STYLES = {
+#     "welcome": ("WELCOME", "Ready for links", "#2563EB"),
+#     "download": ("DOWNLOADING", "Please wait", "#D97706"),
+#     "music": ("ANALYZING", "Finding the track", "#7C3AED"),
+#     "success": ("COMPLETE", "Transfer delivered", "#059669"),
+#     "error": ("FAILED", "Please try again", "#DC2626"),
+# }
 
 @dataclass(slots=True)
 class Panel:
