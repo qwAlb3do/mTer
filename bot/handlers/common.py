@@ -52,6 +52,7 @@ def cleanup_expired_sessions(context: ContextTypes.DEFAULT_TYPE) -> None:
         "playlist_sessions",
         "direct_file_sessions",
         "music_sessions",
+        "retry_sessions",
     ):
         sessions = context.bot_data.get(key)
         if not isinstance(sessions, dict):

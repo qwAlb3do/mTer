@@ -137,6 +137,21 @@ def _direct_file_keyboard(token: str) -> InlineKeyboardMarkup:
     ])
 
 
+def _busy_retry_keyboard(token: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("🔄 Try again", callback_data=f"retry:url:{token}")
+    ]])
+
+
+def _busy_retry_text() -> str:
+    return (
+        "<b>⏳ Your current transfer is still running</b>\n\n"
+        "To keep downloads reliable, only one download or Telegram upload can run "
+        "for your account at a time. Wait for the current transfer to finish, then "
+        "press <b>Try again</b>—you do not need to resend the URL."
+    )
+
+
 async def _safe_edit_text(message, text: str, **kwargs):
     try:
         return await message.edit_text(text, **kwargs)
@@ -685,13 +700,28 @@ async def _download_direct_file(
 
 async def _show_url(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str) -> None:
     user_id = update.effective_user.id
-    if not await _acquire_download_guard(
-        query=update.effective_message,
-        user_id=user_id,
-        message="⏳ Finish your current task before starting another one.",
-    ):
+    if not await download_guard.acquire(user_id):
+        token = token_urlsafe(6)
+        context.bot_data.setdefault("retry_sessions", {})[token] = {
+            "url": url,
+            "owner_id": user_id,
+            "created": time.time(),
+        }
+        await update.effective_message.reply_text(
+            _busy_retry_text(),
+            parse_mode=ParseMode.HTML,
+            reply_markup=_busy_retry_keyboard(token),
+        )
         return
 
+    try:
+        await _process_url(update, context, url)
+    finally:
+        await download_guard.release(user_id)
+
+
+async def _process_url(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str) -> None:
+    """Inspect a URL after the caller has atomically acquired the user's slot."""
     try:
         await react_to_user(update, "url")
         status = await update.effective_message.reply_text("🔎 Extracting URL data…")
@@ -726,6 +756,40 @@ async def _show_url(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str
                 logger.info("Playlist inspection failed; falling back to single item.", exc_info=True)
         await status.edit_text("🎚 Reading available formats…")
         await _render_media_panel(update, context, url, status=status)
+    except TelegramError:
+        logger.warning("Could not render URL workflow for %s", url, exc_info=True)
+        raise
+
+
+@registered
+async def retry_url_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    _, _, token = query.data.split(":", 2)
+    session = _get_session(context, "retry_sessions", token)
+    if not _authorize_session(session, update.effective_user.id):
+        await query.answer("This retry button expired. Send the URL again.", show_alert=True)
+        return
+
+    user_id = update.effective_user.id
+    if not await download_guard.acquire(user_id):
+        await query.answer("Your current transfer is still running.", show_alert=True)
+        await _safe_edit_text(
+            query.message,
+            _busy_retry_text(),
+            parse_mode=ParseMode.HTML,
+            reply_markup=_busy_retry_keyboard(token),
+        )
+        return
+
+    context.bot_data.get("retry_sessions", {}).pop(token, None)
+    await query.answer("Transfer slot available—trying again.")
+    await _safe_edit_text(
+        query.message,
+        "<b>✅ Transfer slot available</b>\n\nChecking your saved URL now…",
+        parse_mode=ParseMode.HTML,
+    )
+    try:
+        await _process_url(update, context, session["url"])
     finally:
         await download_guard.release(user_id)
 

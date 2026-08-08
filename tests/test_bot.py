@@ -20,7 +20,7 @@ os.environ["LOG_DIR"] = "logs"
 from bot.formatter import ascii_banner, help_panel, id_lines, info_panel, send_sticker
 from bot.handlers.media import _send_video_with_fallback
 from bot.handlers.common import error_handler
-from bot.handlers import tools
+from bot.handlers import media, tools
 from bot.config import settings
 from bot.config import Settings
 from bot.errors import DownloadError
@@ -107,6 +107,23 @@ class TelegramDeliveryTests(unittest.IsolatedAsyncioTestCase):
 
         bot.send_sticker.assert_awaited_once()
 
+    async def test_invalid_file_id_falls_back_to_generated_webp(self) -> None:
+        message = SimpleNamespace(
+            reply_sticker=AsyncMock(side_effect=TelegramError("wrong file id")),
+            chat=SimpleNamespace(id=123),
+        )
+        bot = SimpleNamespace(
+            send_sticker=AsyncMock(side_effect=[TelegramError("wrong file id"), None])
+        )
+
+        await send_sticker(message, "welcome", bot)
+
+        self.assertEqual(bot.send_sticker.await_count, 2)
+        generated = bot.send_sticker.await_args_list[1].kwargs["sticker"]
+        self.assertIsInstance(generated, BytesIO)
+        self.assertEqual(generated.name, "mter-welcome.webp")
+        self.assertGreater(len(generated.getvalue()), 100)
+
     async def test_video_retries_without_thumbnail(self) -> None:
         sent = SimpleNamespace(video=SimpleNamespace(file_id="video-id"), document=None)
         message = SimpleNamespace(
@@ -123,6 +140,51 @@ class TelegramDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(message.reply_video.await_count, 2)
         self.assertIsNone(message.reply_video.await_args_list[1].kwargs["thumbnail"])
         message.reply_document.assert_not_awaited()
+
+
+class BusyRetryTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncTearDown(self) -> None:
+        await media.download_guard.release(123)
+
+    @staticmethod
+    def _update():
+        message = SimpleNamespace(edit_text=AsyncMock())
+        query = SimpleNamespace(
+            data="retry:url:token",
+            message=message,
+            answer=AsyncMock(),
+        )
+        return SimpleNamespace(
+            callback_query=query,
+            effective_user=SimpleNamespace(id=123),
+            effective_message=message,
+        )
+
+    async def test_try_again_keeps_button_while_transfer_is_active(self) -> None:
+        update = self._update()
+        context = SimpleNamespace(bot_data={"retry_sessions": {
+            "token": {"owner_id": 123, "url": "https://example.com/video", "created": 1},
+        }})
+        await media.download_guard.acquire(123)
+
+        await media.retry_url_callback.__wrapped__(update, context)
+
+        self.assertTrue(update.callback_query.answer.await_args.kwargs["show_alert"])
+        markup = update.callback_query.message.edit_text.await_args.kwargs["reply_markup"]
+        self.assertEqual(markup.inline_keyboard[0][0].callback_data, "retry:url:token")
+
+    async def test_try_again_starts_saved_url_when_slot_is_free(self) -> None:
+        update = self._update()
+        context = SimpleNamespace(bot_data={"retry_sessions": {
+            "token": {"owner_id": 123, "url": "https://example.com/video", "created": 1},
+        }})
+
+        with patch("bot.handlers.media._process_url", new=AsyncMock()) as process:
+            await media.retry_url_callback.__wrapped__(update, context)
+
+        process.assert_awaited_once_with(update, context, "https://example.com/video")
+        self.assertNotIn("token", context.bot_data["retry_sessions"])
+        self.assertFalse(await media.download_guard.is_active(123))
 
 
 class UrlClassificationTests(unittest.TestCase):

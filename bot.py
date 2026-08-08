@@ -40,6 +40,7 @@ from bot.handlers.media import (
     plain_url,
     playlist_callback,
     refresh_callback,
+    retry_url_callback,
     url_command,
 )
 from bot.formatter import ascii_banner
@@ -128,6 +129,7 @@ def build_application() -> Application:
     app.add_handler(CallbackQueryHandler(direct_file_callback, pattern=r"^direct:"))
     app.add_handler(CallbackQueryHandler(cancel_callback, pattern=r"^cancel:"))
     app.add_handler(CallbackQueryHandler(refresh_callback, pattern=r"^refresh:"))
+    app.add_handler(CallbackQueryHandler(retry_url_callback, pattern=r"^retry:url:"))
     app.add_handler(CallbackQueryHandler(playlist_callback, pattern=r"^pl:"))
     app.add_handler(CallbackQueryHandler(close_callback, pattern=r"^close:"))
 

@@ -2,17 +2,27 @@ from __future__ import annotations
 
 import html
 import math
+from io import BytesIO
 from urllib.parse import quote_plus
 from dataclasses import dataclass
 from typing import Iterable
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Message, ReactionTypeEmoji, Update
 from telegram.error import TelegramError
+from PIL import Image, ImageDraw, ImageFont
 
 from bot.config import settings
 import logging
 
 logger = logging.getLogger(__name__)
+
+STICKER_FALLBACKS = {
+    "welcome": ("WELCOME", "Ready for links", "#2563EB"),
+    "download": ("DOWNLOADING", "Please wait", "#D97706"),
+    "music": ("ANALYZING", "Finding the track", "#7C3AED"),
+    "success": ("COMPLETE", "Transfer delivered", "#059669"),
+    "error": ("FAILED", "Please try again", "#DC2626"),
+}
 
 @dataclass(slots=True)
 class Panel:
@@ -228,15 +238,15 @@ async def send_sticker(message: Message, kind: str, bot: Bot | None = None) -> N
         "error": settings.error_sticker_id,
         "welcome": settings.welcome_sticker_id,
     }.get(kind)
-    if not sticker_id:
-        return
-    try:
-        await message.reply_sticker(sticker_id)
-        return
-    except TelegramError as exc:
-        logger.warning("reply_sticker failed for %s: %s", kind, exc)
+    if sticker_id:
+        try:
+            await message.reply_sticker(sticker_id)
+            return
+        except TelegramError as exc:
+            logger.warning("Configured sticker ID failed for %s: %s", kind, exc)
 
-    chat_id = getattr(message.chat, "id", None) or getattr(message, "chat_id", None)
+    chat = getattr(message, "chat", None)
+    chat_id = getattr(chat, "id", None) or getattr(message, "chat_id", None)
     if chat_id is None:
         logger.warning("Could not determine chat_id for sticker fallback: %s", kind)
         return
@@ -244,15 +254,48 @@ async def send_sticker(message: Message, kind: str, bot: Bot | None = None) -> N
     if bot is None:
         logger.warning("Could not find bot instance for sticker fallback: %s", kind)
         return
+    if sticker_id:
+        try:
+            await bot.send_sticker(chat_id=chat_id, sticker=sticker_id)
+            return
+        except TelegramError as exc:
+            logger.warning("Bot could not reuse configured sticker %s: %s", kind, exc)
+
     try:
-        await bot.send_sticker(chat_id=chat_id, sticker=sticker_id)
-    except TelegramError as exc:
-        logger.warning(
-            "Could not send fallback sticker %s to chat %s: %s",
-            kind,
-            chat_id,
-            exc,
-        )
+        generated = _generated_sticker(kind)
+        await bot.send_sticker(chat_id=chat_id, sticker=generated)
+        logger.info("Sent generated fallback sticker for %s", kind)
+    except (OSError, TelegramError) as exc:
+        logger.warning("Could not send generated sticker %s to chat %s: %s", kind, chat_id, exc)
+
+
+def _generated_sticker(kind: str) -> BytesIO:
+    """Build a valid 512px WebP sticker without relying on bot-specific file IDs."""
+    title, subtitle, color = STICKER_FALLBACKS.get(
+        kind, ("mTer", "Media downloader", "#334155")
+    )
+    image = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle((24, 80, 488, 432), radius=64, fill=color)
+    draw.rounded_rectangle((38, 94, 474, 418), radius=52, outline="white", width=5)
+    try:
+        title_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 54)
+        subtitle_font = ImageFont.truetype("DejaVuSans.ttf", 28)
+    except OSError:
+        title_font = subtitle_font = ImageFont.load_default()
+
+    def centered(text: str, y: int, font) -> None:
+        box = draw.textbbox((0, 0), text, font=font)
+        x = (512 - (box[2] - box[0])) // 2
+        draw.text((x, y), text, font=font, fill="white")
+
+    centered(title, 205, title_font)
+    centered(subtitle, 290, subtitle_font)
+    output = BytesIO()
+    output.name = f"mter-{kind}.webp"
+    image.save(output, format="WEBP", quality=90, method=6)
+    output.seek(0)
+    return output
 
 
 def ascii_banner() -> str:

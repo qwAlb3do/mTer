@@ -195,6 +195,11 @@ Public commands include `/start`, `/help`, `/info`, `/stat`, `/id`, `/url`,
 `/quote`, `/ss`, `/search`, `/wiki`, and `/ping`. Owner-only tools include
 `/jobs`, `/broadcast`, `/restart`, `/stop`, `/ban`, and `/unban`.
 
+Sticker file IDs are bot-specific. You may set `WELCOME_STICKER_ID`,
+`DOWNLOADING_STICKER_ID`, `ANALYZING_STICKER_ID`, `SUCCESS_STICKER_ID`, and
+`ERROR_STICKER_ID` in `.env`. If an ID is empty or Telegram rejects it, mTer
+uploads a locally generated WebP sticker instead.
+
 ## Logs and data
 
 ```bash
