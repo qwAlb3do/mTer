@@ -11,8 +11,9 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY requirements.txt .
-RUN python -m pip install --no-cache-dir -r requirements.txt \
-    && python -m pip install --no-cache-dir --upgrade yt-dlp
+# yt-dlp recommends its nightly channel for site breakages; --pre selects the
+# latest nightly while the version floor prevents known-broken TikTok builds.
+RUN python -m pip install --no-cache-dir --upgrade --pre -r requirements.txt
 
 RUN groupadd --gid 1000 bot \
     && useradd --uid 1000 --gid bot --create-home bot \

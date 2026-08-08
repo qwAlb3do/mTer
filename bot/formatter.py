@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import logging
 import math
 from io import BytesIO
 from urllib.parse import quote_plus
@@ -11,12 +12,26 @@ from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Message, R
 from telegram.error import TelegramError
 from PIL import Image, ImageDraw, ImageFont
 
-from bot.config import settings
-import logging
+from bot.config import (
+    DEFAULT_ANALYZING_STICKER_ID,
+    DEFAULT_DOWNLOADING_STICKER_ID,
+    DEFAULT_ERROR_STICKER_ID,
+    DEFAULT_SUCCESS_STICKER_ID,
+    DEFAULT_WELCOME_STICKER_ID,
+    settings,
+)
 
 logger = logging.getLogger(__name__)
 
 STICKER_FALLBACKS = {
+    "welcome": DEFAULT_WELCOME_STICKER_ID,
+    "download": DEFAULT_DOWNLOADING_STICKER_ID,
+    "music": DEFAULT_ANALYZING_STICKER_ID,
+    "success": DEFAULT_SUCCESS_STICKER_ID,
+    "error": DEFAULT_ERROR_STICKER_ID,
+}
+
+GENERATED_STICKER_STYLES = {
     "welcome": ("WELCOME", "Ready for links", "#2563EB"),
     "download": ("DOWNLOADING", "Please wait", "#D97706"),
     "music": ("ANALYZING", "Finding the track", "#7C3AED"),
@@ -231,13 +246,7 @@ async def react_to_user(update: Update, kind: str) -> None:
 
 
 async def send_sticker(message: Message, kind: str, bot: Bot | None = None) -> None:
-    sticker_id = {
-        "download": settings.downloading_sticker_id,
-        "music": settings.analyzing_sticker_id,
-        "success": settings.success_sticker_id,
-        "error": settings.error_sticker_id,
-        "welcome": settings.welcome_sticker_id,
-    }.get(kind)
+    sticker_id = STICKER_FALLBACKS.get(kind)
     if sticker_id:
         try:
             await message.reply_sticker(sticker_id)
@@ -271,7 +280,7 @@ async def send_sticker(message: Message, kind: str, bot: Bot | None = None) -> N
 
 def _generated_sticker(kind: str) -> BytesIO:
     """Build a valid 512px WebP sticker without relying on bot-specific file IDs."""
-    title, subtitle, color = STICKER_FALLBACKS.get(
+    title, subtitle, color = GENERATED_STICKER_STYLES.get(
         kind, ("mTer", "Media downloader", "#334155")
     )
     image = Image.new("RGBA", (512, 512), (0, 0, 0, 0))

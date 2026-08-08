@@ -209,6 +209,15 @@ class YTDLPService:
             return DownloadError(detail)
         if "unsupported url" in lowered:
             return DownloadError("This URL is not supported by the installed yt-dlp version.")
+        if "universal data for rehydration" in lowered:
+            detail = (
+                "TikTok did not return usable video data. Rebuild the Docker image to load "
+                "the current yt-dlp TikTok extractor. If the image is current, TikTok is "
+                "blocking or challenging the Google Cloud Shell IP; try again later or use "
+                "a different network location."
+            )
+            logger.warning("TikTok webpage challenge failed (yt-dlp %s).", ytdlp_version)
+            return DownloadError(detail)
         logger.warning("yt-dlp %s failed: %s", ytdlp_version, message)
         return DownloadError(message)
 

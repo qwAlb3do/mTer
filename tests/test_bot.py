@@ -334,6 +334,14 @@ class YTDLPServiceTests(unittest.TestCase):
         self.assertIn("expired or invalid", str(error))
         self.assertIn("cannot guarantee", str(error))
 
+    def test_tiktok_rehydration_failure_has_docker_and_cloud_ip_guidance(self) -> None:
+        error = YTDLPService._download_error(
+            RuntimeError("Unable to extract universal data for rehydration")
+        )
+
+        self.assertIn("Rebuild the Docker image", str(error))
+        self.assertIn("Google Cloud Shell IP", str(error))
+
 
 class SettingsTests(unittest.TestCase):
     def test_local_bot_api_is_the_default_upload_endpoint(self) -> None:

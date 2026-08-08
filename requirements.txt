@@ -1,7 +1,9 @@
 python-telegram-bot==22.7
 httpx>=0.28,<1
 Pillow>=10,<12
-yt-dlp>=2026.6.0
+# TikTok challenge solving requires a post-2026.03.13 extractor and browser
+# impersonation support. A concrete floor also invalidates stale Docker layers.
+yt-dlp[default,curl-cffi]>=2026.7.4
 spotdl>=4.4,<5
 spotipy>=2.23,<3
 spotipy-anon>=1.5,<2

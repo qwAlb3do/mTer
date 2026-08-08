@@ -105,6 +105,20 @@ docker compose build --pull --no-cache bot
 docker compose up -d
 ```
 
+After a TikTok extractor error, force a clean bot rebuild so Docker cannot
+reuse an older yt-dlp layer:
+
+```bash
+docker compose build --pull --no-cache bot
+docker compose up -d bot
+docker compose exec bot python -m yt_dlp --version
+```
+
+The image installs the yt-dlp nightly channel with browser impersonation support
+required by TikTok's current webpage challenge. TikTok can still reject Google
+Cloud Shell datacenter IPs; when that happens the bot reports the restriction
+clearly.
+
 Do not use `docker compose down -v` unless you intentionally want to delete all
 named-volume data.
 
@@ -195,10 +209,8 @@ Public commands include `/start`, `/help`, `/info`, `/stat`, `/id`, `/url`,
 `/quote`, `/ss`, `/search`, `/wiki`, and `/ping`. Owner-only tools include
 `/jobs`, `/broadcast`, `/restart`, `/stop`, `/ban`, and `/unban`.
 
-Sticker file IDs are bot-specific. You may set `WELCOME_STICKER_ID`,
-`DOWNLOADING_STICKER_ID`, `ANALYZING_STICKER_ID`, `SUCCESS_STICKER_ID`, and
-`ERROR_STICKER_ID` in `.env`. If an ID is empty or Telegram rejects it, mTer
-uploads a locally generated WebP sticker instead.
+Sticker file IDs are maintained in `bot/config.py`, not `.env`. If Telegram
+rejects a configured ID, mTer uploads a locally generated WebP sticker instead.
 
 ## Logs and data
 
