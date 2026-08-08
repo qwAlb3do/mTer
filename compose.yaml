@@ -47,6 +47,8 @@ services:
       DOWNLOAD_DIR: /shared/videos
       LOG_DIR: /app/logs
       USERS_FILE: /app/database/users.json
+      ERRORS_FILE: /app/database/errors.json
+      URL_TEST_LIST_FILE: /app/tests/url_list.json
       YTDLP_COOKIES_FILE: /run/secrets/youtube-cookies.txt
       YTDLP_JS_RUNTIMES: node:/usr/bin/node
     volumes:
@@ -55,6 +57,7 @@ services:
       - ./logs:/app/logs
       - telegram-bot-api-data:/var/lib/telegram-bot-api:ro
       - ./secrets:/run/secrets:ro
+      - ./tests:/app/tests
     networks:
       - bot-network
     depends_on:

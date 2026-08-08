@@ -338,6 +338,10 @@ class YTDLPService:
                 raise error from exc
             return None
 
+        if not isinstance(info, dict):
+            logger.info("Playlist extractor returned no metadata for %s", url)
+            return None
+
         entries = info.get("entries") or []
         if info.get("_type") != "playlist" or not entries:
             return None
@@ -378,6 +382,12 @@ class YTDLPService:
             raise
         except Exception as exc:
             raise self._download_error(exc) from exc
+
+        if not isinstance(info, dict):
+            raise DownloadError(
+                "The site returned no downloadable media metadata. "
+                "Try the webpage capture option instead."
+            )
 
         raw_formats = info.get("formats") or []
         formats: list[FormatOption] = []

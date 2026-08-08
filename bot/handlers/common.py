@@ -24,6 +24,8 @@ from bot.formatter import (
     start_keyboard,
 )
 from bot.users import users
+from bot.test_url_store import save_test_url
+from bot.utils import extract_url
 
 logger = logging.getLogger(__name__)
 Handler = Callable[[Update, ContextTypes.DEFAULT_TYPE], Awaitable[None]]
@@ -68,6 +70,7 @@ def cleanup_expired_sessions(context: ContextTypes.DEFAULT_TYPE) -> None:
         "direct_file_sessions",
         "music_sessions",
         "retry_sessions",
+        "website_sessions",
     ):
         sessions = context.bot_data.get(key)
         if not isinstance(sessions, dict):
@@ -288,6 +291,43 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         except Exception:
             failed += 1
     await status.edit_text(f"Broadcast finished. Sent: {sent} · Failed: {failed}")
+
+
+@registered
+@owner_only
+async def testurl_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    text = " ".join(context.args)
+    url = extract_url(text)
+    format_name = next(
+        (item.lower() for item in context.args if item.lower() in {"fastest", "video", "audio"}),
+        "video",
+    )
+    if not url:
+        await update.effective_message.reply_text(
+            "<b>⚠️ Missing test URL</b>\n\n"
+            "Usage: <code>/testurl URL [video|audio|fastest]</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    try:
+        saved = await save_test_url(url, format_name)
+    except (OSError, ValueError) as exc:
+        logger.warning("Could not save admin test URL: %s", exc)
+        await update.effective_message.reply_text(
+            f"<b>⚠️ Could not save test URL</b>\n\n{escape(exc)}",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    action = "Added" if saved.created else "Updated"
+    await update.effective_message.reply_text(
+        f"<b>✅ {action} admin URL test case</b>\n\n"
+        f"ID: <code>{escape(saved.case_id)}</code>\n"
+        f"Platform: <code>{escape(saved.platform)}</code>\n"
+        f"Format: <code>{escape(saved.format)}</code>\n"
+        f"File: <code>{escape(settings.url_test_list_file)}</code>\n\n"
+        "The test was not run.",
+        parse_mode=ParseMode.HTML,
+    )
 
 
 @registered

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import importlib.util
+import logging
 import tempfile
 import unittest
 from io import BytesIO
@@ -10,6 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 from telegram.error import Conflict, TelegramError
 
 
@@ -26,10 +29,20 @@ from bot.handlers import common, media, tools
 from bot.config import settings
 from bot.config import Settings
 from bot.errors import DownloadError
+from bot.error_store import JsonErrorHandler
+from bot.services.platform_resolver import resolve_unsupported_media
 from bot.services.ytdlp_service import YTDLPService
+from bot.services.website_capture import (
+    UnsafeWebsiteError,
+    _capture_assets,
+    discover_page_media,
+    validate_public_url,
+)
 from bot.system_dependencies import require_ffmpeg
 from bot.utils import extract_url, is_http_url, is_likely_playlist_url
 from bot.local_bot_api import ensure_disk_space, local_file_path
+from bot.test_url_store import describe_url, save_test_url
+from bot.users import UserStore
 
 
 def _load_bot_entrypoint():
@@ -124,6 +137,25 @@ class TelegramDeliveryTests(unittest.IsolatedAsyncioTestCase):
             STICKER_FALLBACKS["welcome"],
         )
 
+    async def test_docker_sticker_uses_hosted_api_when_local_api_rejects_id(self) -> None:
+        message = SimpleNamespace(
+            reply_sticker=AsyncMock(side_effect=TelegramError("local API rejected ID")),
+            chat=SimpleNamespace(id=123),
+        )
+        local_bot = SimpleNamespace(send_sticker=AsyncMock())
+        original_mode = settings.runtime_mode
+        settings.runtime_mode = "docker"
+        try:
+            with patch(
+                "bot.formatter._send_sticker_via_hosted_api", new=AsyncMock()
+            ) as hosted_send:
+                await send_sticker(message, "welcome", local_bot)
+        finally:
+            settings.runtime_mode = original_mode
+
+        hosted_send.assert_awaited_once_with(123, STICKER_FALLBACKS["welcome"])
+        local_bot.send_sticker.assert_not_awaited()
+
     async def test_video_retries_without_thumbnail(self) -> None:
         sent = SimpleNamespace(video=SimpleNamespace(file_id="video-id"), document=None)
         message = SimpleNamespace(
@@ -187,6 +219,167 @@ class BusyRetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await media.download_guard.is_active(123))
 
 
+class GeneralUrlMenuTests(unittest.IsolatedAsyncioTestCase):
+    async def test_ordinary_website_gets_relevant_actions_without_quality_buttons(self) -> None:
+        status = SimpleNamespace(edit_text=AsyncMock())
+        message = SimpleNamespace(reply_text=AsyncMock(return_value=status))
+        update = SimpleNamespace(
+            effective_user=SimpleNamespace(id=123),
+            effective_message=message,
+        )
+        context = SimpleNamespace(bot_data={})
+
+        with (
+            patch("bot.handlers.media.react_to_user", new=AsyncMock()),
+            patch("bot.handlers.media.validate_public_url", new=AsyncMock()),
+            patch("bot.handlers.media._inspect_direct_file", new=AsyncMock(return_value=None)),
+            patch("bot.handlers.media.is_known_media_url", return_value=False),
+            patch("bot.handlers.media._send_website_capture", new=AsyncMock()) as capture,
+        ):
+            await media._process_url(update, context, "https://example.com/article")
+
+        capture.assert_not_awaited()
+        markup = status.edit_text.await_args.kwargs["reply_markup"]
+        callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+        labels = [button.text for row in markup.inline_keyboard for button in row]
+        self.assertTrue(any(value.startswith("website:capture:") for value in callbacks))
+        self.assertTrue(any(value.startswith("website:media:") for value in callbacks))
+        self.assertFalse(any("kbps" in label or label.endswith("p") for label in labels))
+
+    def test_direct_image_uses_single_image_download_action(self) -> None:
+        info = media.DirectFileInfo(
+            "https://example.com/photo.jpg", "photo.jpg", "image/jpeg", 1024
+        )
+
+        markup = media._direct_file_keyboard("token", info)
+        labels = [button.text for row in markup.inline_keyboard for button in row]
+
+        self.assertIn("🖼 Download image", labels)
+        self.assertFalse(any("kbps" in label or label.endswith("p") for label in labels))
+
+    def test_signed_cdn_url_gets_bounded_filesystem_name(self) -> None:
+        long_name = f"{'token' * 100}.jpg"
+        result = media._safe_download_filename(long_name, f"https://cdn.example/{long_name}")
+
+        self.assertLessEqual(len(result), 120)
+        self.assertTrue(result.endswith(".jpg"))
+        self.assertNotIn("/", result)
+
+    async def test_reddit_media_redirect_is_resolved_without_ytdlp(self) -> None:
+        url = "https://www.reddit.com/media?url=https%3A%2F%2Fi.redd.it%2Fimage.png"
+        with patch(
+            "bot.services.platform_resolver.validate_public_url", new=AsyncMock()
+        ) as validate:
+            result = await resolve_unsupported_media(url)
+
+        self.assertEqual(result, "https://i.redd.it/image.png")
+        validate.assert_awaited_once_with("https://i.redd.it/image.png")
+
+    async def test_reddit_post_uses_public_json_media_metadata(self) -> None:
+        post = "https://www.reddit.com/r/example/comments/abc123/a_post/"
+        payload = [{"data": {"children": [{"data": {
+            "url_overridden_by_dest": "https://i.redd.it/photo.jpg"
+        }}]}}]
+        with (
+            patch(
+                "bot.services.platform_resolver.fetch_public_json",
+                new=AsyncMock(return_value=payload),
+            ) as fetch,
+            patch(
+                "bot.services.platform_resolver.validate_public_url",
+                new=AsyncMock(),
+            ),
+            patch(
+                "bot.services.platform_resolver.discover_page_media",
+                new=AsyncMock(),
+            ) as discover,
+        ):
+            result = await resolve_unsupported_media(post)
+
+        self.assertEqual(result, "https://i.redd.it/photo.jpg")
+        self.assertIn("/comments/abc123/a_post.json", fetch.await_args.args[0])
+        discover.assert_not_awaited()
+
+    async def test_reddit_json_failure_falls_back_and_unwraps_html_media_url(self) -> None:
+        post = "https://www.reddit.com/r/example/comments/abc123/a_post/"
+        wrapper = (
+            "https://www.reddit.com/media?url="
+            "https%3A%2F%2Fi.redd.it%2Ffallback-image.png"
+        )
+        with (
+            patch(
+                "bot.services.platform_resolver.fetch_public_json",
+                new=AsyncMock(side_effect=httpx.HTTPError("blocked")),
+            ),
+            patch(
+                "bot.services.platform_resolver.discover_page_media",
+                new=AsyncMock(return_value=wrapper),
+            ) as discover,
+            patch(
+                "bot.services.platform_resolver.validate_public_url",
+                new=AsyncMock(),
+            ) as validate,
+        ):
+            result = await resolve_unsupported_media(post)
+
+        self.assertEqual(result, "https://i.redd.it/fallback-image.png")
+        discover.assert_awaited_once_with(post)
+        validate.assert_awaited_once_with("https://i.redd.it/fallback-image.png")
+
+    async def test_meta_refresh_media_wrapper_is_discovered_and_unwrapped(self) -> None:
+        post = "https://www.reddit.com/r/example/comments/abc123/a_post/"
+        html_page = (
+            b'<meta http-equiv="refresh" content="0; url=https://www.reddit.com/media?'
+            b'url=https%3A%2F%2Fi.redd.it%2Frefresh-image.png">'
+        )
+        with (
+            patch(
+                "bot.services.platform_resolver.fetch_public_json",
+                new=AsyncMock(side_effect=httpx.HTTPError("blocked")),
+            ),
+            patch(
+                "bot.services.website_capture._fetch_html",
+                new=AsyncMock(return_value=(post, html_page, "text/html")),
+            ),
+            patch(
+                "bot.services.website_capture.validate_public_url",
+                new=AsyncMock(),
+            ),
+            patch(
+                "bot.services.platform_resolver.validate_public_url",
+                new=AsyncMock(),
+            ),
+        ):
+            result = await resolve_unsupported_media(post)
+
+        self.assertEqual(result, "https://i.redd.it/refresh-image.png")
+
+
+class JsonErrorStoreTests(unittest.TestCase):
+    def test_warning_and_traceback_are_written_to_json(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "errors.json"
+            handler = JsonErrorHandler(path)
+            logger = logging.getLogger("tests.error-store")
+            logger.handlers = [handler]
+            logger.propagate = False
+            logger.setLevel(logging.WARNING)
+            try:
+                try:
+                    raise OSError("file name too long")
+                except OSError:
+                    logger.warning("Direct file failed: %s", "https://example.com/file", exc_info=True)
+                records = json.loads(path.read_text(encoding="utf-8"))
+            finally:
+                logger.handlers = []
+                handler.close()
+
+        self.assertEqual(records[0]["level"], "WARNING")
+        self.assertIn("https://example.com/file", records[0]["message"])
+        self.assertEqual(records[0]["exception"]["type"], "OSError")
+        self.assertIn("file name too long", records[0]["exception"]["traceback"])
+
+
 class UrlClassificationTests(unittest.TestCase):
     def test_extract_url_trims_common_trailing_punctuation(self) -> None:
         self.assertEqual(
@@ -209,7 +402,178 @@ class UrlClassificationTests(unittest.TestCase):
         self.assertTrue(is_likely_playlist_url("https://example.com/album/example-title"))
 
 
+class WebsiteSafetyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_private_ip_url_is_blocked(self) -> None:
+        private_record = [(2, 1, 6, "", ("127.0.0.1", 80))]
+        with patch(
+            "bot.services.website_capture.asyncio.to_thread",
+            new=AsyncMock(return_value=private_record),
+        ):
+            with self.assertRaises(UnsafeWebsiteError):
+                await validate_public_url("http://127.0.0.1/admin")
+
+    async def test_hostname_resolving_to_private_ip_is_blocked(self) -> None:
+        private_record = [(2, 1, 6, "", ("10.0.0.5", 443))]
+        with patch(
+            "bot.services.website_capture.asyncio.to_thread",
+            new=AsyncMock(return_value=private_record),
+        ):
+            with self.assertRaises(UnsafeWebsiteError):
+                await validate_public_url("https://internal.example/")
+
+    async def test_public_hostname_is_allowed(self) -> None:
+        public_record = [(2, 1, 6, "", ("93.184.216.34", 443))]
+        with patch(
+            "bot.services.website_capture.asyncio.to_thread",
+            new=AsyncMock(return_value=public_record),
+        ):
+            await validate_public_url("https://example.com/")
+
+    async def test_nonstandard_port_is_blocked_before_dns(self) -> None:
+        with self.assertRaises(UnsafeWebsiteError):
+            await validate_public_url("https://example.com:8080/")
+
+    async def test_static_same_origin_assets_are_captured_and_rewritten(self) -> None:
+        html = (
+            b'<link rel="stylesheet" href="/style.css">'
+            b'<img src="/images/photo.png">'
+        )
+
+        async def fetch(url, _limit, _accept="*/*", **_kwargs):
+            if url.endswith("style.css"):
+                return url, b"body{background:url('/images/bg.png')}", "text/css"
+            return url, b"image-bytes", "image/png"
+
+        with patch("bot.services.website_capture._fetch_bytes", side_effect=fetch):
+            rewritten, assets, manifest = await _capture_assets(
+                "https://example.com/page", html, "text/html; charset=utf-8"
+            )
+
+        self.assertNotIn(b'href="/style.css"', rewritten)
+        self.assertNotIn(b'src="/images/photo.png"', rewritten)
+        self.assertEqual(len(assets), 3)
+        self.assertEqual(manifest["captured_assets"], 3)
+        css = next(data for path, data in assets.items() if path.endswith("style.css"))
+        self.assertIn(b"../assets/", css)
+
+    async def test_page_media_discovery_resolves_reddit_style_image_metadata(self) -> None:
+        html = b'<meta property="og:image" content="https://i.redd.it/example.png">'
+        with (
+            patch(
+                "bot.services.website_capture._fetch_html",
+                new=AsyncMock(return_value=("https://reddit.com/post", html, "text/html")),
+            ),
+            patch(
+                "bot.services.website_capture.validate_public_url",
+                new=AsyncMock(),
+            ),
+        ):
+            result = await discover_page_media("https://reddit.com/post")
+
+        self.assertEqual(result, "https://i.redd.it/example.png")
+
+
+class TestUrlStoreTests(unittest.IsolatedAsyncioTestCase):
+    def test_describe_url_generates_platform_and_case_id(self) -> None:
+        platform, case_id = describe_url(
+            "https://www.youtube.com/watch?v=Cyl3X88KEgg"
+        )
+
+        self.assertEqual(platform, "youtube")
+        self.assertEqual(case_id, "youtube-cyl3x88kegg")
+
+    async def test_save_test_url_creates_then_updates_same_case(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "url_list.json"
+            original = settings.url_test_list_file
+            settings.url_test_list_file = path
+            try:
+                created = await save_test_url(
+                    "https://www.tiktok.com/@creator/video/7517763008584568086",
+                    "video",
+                )
+                updated = await save_test_url(
+                    "https://www.tiktok.com/@creator/video/7517763008584568086",
+                    "audio",
+                )
+            finally:
+                settings.url_test_list_file = original
+
+            payload = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertTrue(created.created)
+        self.assertFalse(updated.created)
+        self.assertEqual(created.case_id, "tiktok-7517763008584568086")
+        self.assertEqual(len(payload["cases"]), 1)
+        self.assertEqual(payload["cases"][0]["format"], "audio")
+
+
+class UserPrivacyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_owner_touch_and_history_are_not_persisted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "users.json"
+            store = UserStore(path)
+            owner = SimpleNamespace(
+                id=settings.owner_id,
+                username="owner",
+                first_name="Private",
+                last_name="Owner",
+                language_code="en",
+                is_bot=False,
+            )
+
+            await store.touch(owner)
+            await store.add_success(settings.owner_id, "https://example.com", "Private title")
+
+            self.assertFalse(path.exists())
+
+    async def test_owner_cache_is_shared_without_owner_record(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "users.json"
+            store = UserStore(path)
+
+            await store.add_success(
+                settings.owner_id,
+                "https://example.com/video",
+                "Cached title",
+                cache_key="cache-key",
+                file_id="telegram-file-id",
+                file_kind="video",
+            )
+            payload = json.loads(path.read_text(encoding="utf-8"))
+
+            self.assertNotIn(str(settings.owner_id), payload)
+            self.assertEqual(payload["_cache"]["cache-key"]["file_id"], "telegram-file-id")
+
+    async def test_legacy_owner_record_is_removed_without_deleting_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "users.json"
+            path.write_text(json.dumps({
+                str(settings.owner_id): {"id": settings.owner_id, "username": "owner"},
+                "_cache": {"key": {"file_id": "cached"}},
+            }), encoding="utf-8")
+            store = UserStore(path)
+
+            removed = await store.remove_user(settings.owner_id)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+
+            self.assertTrue(removed)
+            self.assertNotIn(str(settings.owner_id), payload)
+            self.assertIn("_cache", payload)
+
+
 class YTDLPServiceTests(unittest.TestCase):
+    def test_empty_extractor_result_becomes_download_error(self) -> None:
+        downloader = MagicMock()
+        downloader.__enter__.return_value.extract_info.return_value = None
+        downloader.__exit__.return_value = False
+
+        with patch("bot.services.ytdlp_service.yt_dlp.YoutubeDL", return_value=downloader):
+            with self.assertRaises(DownloadError) as raised:
+                YTDLPService()._inspect_sync("https://example.com/unsupported")
+
+        self.assertIn("no downloadable media metadata", str(raised.exception))
+
     def test_progressive_video_uses_exact_selected_format(self) -> None:
         option = SimpleNamespace(format_id="hls-480", has_audio=True)
 
@@ -475,6 +839,7 @@ class CommandRegistrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("resume", owner_commands)
         self.assertIn("ban", owner_commands)
         self.assertIn("unban", owner_commands)
+        self.assertIn("testurl", owner_commands)
         self.assertEqual(owner_call.kwargs["scope"].chat_id, 999)
 
 

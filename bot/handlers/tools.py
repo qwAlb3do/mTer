@@ -14,6 +14,7 @@ from telegram.ext import ContextTypes
 from bot.formatter import escape
 from bot.handlers.common import registered
 from bot.utils import is_http_url
+from bot.services.website_capture import UnsafeWebsiteError, capture_screenshot
 
 
 ERROR_PREFIX = "<b>⚠️ Request failed</b>\n\n"
@@ -92,14 +93,14 @@ async def screenshot_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             parse_mode=ParseMode.HTML,
         )
         return
-    screenshot_url = f"https://image.thum.io/get/width/1280/crop/900/{url}"
     try:
+        screenshot = await capture_screenshot(url)
         await update.effective_message.reply_photo(
-            screenshot_url,
+            screenshot,
             caption=f"<b>📸 Website screenshot</b>\n<code>{escape(url)}</code>",
             parse_mode=ParseMode.HTML,
         )
-    except Exception as exc:
+    except (httpx.HTTPError, UnsafeWebsiteError) as exc:
         await _reply_error(
             update.effective_message,
             f"URL: <code>{escape(url)}</code>\nError: <code>{escape(type(exc).__name__)}</code>",

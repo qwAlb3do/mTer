@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Annotated
 
@@ -12,6 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DOWNLOAD_DIR = "downloads"
 LOG_DIR = "logs"
 USERS_FILE = "database/users.json"
+ERRORS_FILE = "database/errors.json"
 MAX_UPLOAD_BYTES=2000000000
 MAX_CONCURRENT_DOWNLOADS=2
 DOWNLOAD_TIMEOUT_SECONDS=1800
@@ -58,6 +60,10 @@ class Settings(BaseSettings):
     download_dir: Path = Field(default=Path("downloads"), alias="DOWNLOAD_DIR")
     log_dir: Path = Field(default=Path("logs"), alias="LOG_DIR")
     users_file: Path = Field(default=Path("database/users.json"), alias="USERS_FILE")
+    errors_file: Path = Field(default=Path("database/errors.json"), alias="ERRORS_FILE")
+    url_test_list_file: Path = Field(
+        default=Path("tests/url_list.json"), alias="URL_TEST_LIST_FILE"
+    )
     max_upload_bytes: int = Field(default=2_000_000_000, alias="MAX_UPLOAD_BYTES")
     min_free_disk_bytes: int = Field(default=500_000_000, alias="MIN_FREE_DISK_BYTES")
     max_concurrent_downloads: int = Field(default=2, alias="MAX_CONCURRENT_DOWNLOADS")
@@ -191,7 +197,16 @@ if not settings.is_docker:
     settings.download_dir = PROJECT_ROOT / "downloads"
     settings.log_dir = PROJECT_ROOT / "logs"
     settings.users_file = PROJECT_ROOT / "database" / "users.json"
+    settings.errors_file = PROJECT_ROOT / "database" / "errors.json"
+    settings.url_test_list_file = PROJECT_ROOT / "tests" / "url_list.json"
     settings.max_upload_bytes = min(settings.max_upload_bytes, 50_000_000)
+    detected_runtimes = [
+        f"{name}:{path}"
+        for name in ("node", "deno")
+        if (path := shutil.which(name))
+    ]
+    if detected_runtimes:
+        settings.ytdlp_js_runtimes = detected_runtimes
     if settings.ytdlp_cookie_file is not None:
         local_cookie = PROJECT_ROOT / "secrets" / settings.ytdlp_cookie_file.name
         settings.ytdlp_cookie_file = (
@@ -203,4 +218,6 @@ if not settings.is_docker:
 settings.download_dir.mkdir(parents=True, exist_ok=True)
 settings.log_dir.mkdir(parents=True, exist_ok=True)
 settings.users_file.parent.mkdir(parents=True, exist_ok=True)
+settings.errors_file.parent.mkdir(parents=True, exist_ok=True)
+settings.url_test_list_file.parent.mkdir(parents=True, exist_ok=True)
 settings.cookie_work_file.parent.mkdir(parents=True, exist_ok=True)

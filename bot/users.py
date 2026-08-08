@@ -32,7 +32,22 @@ class UserStore:
         )
         temp.replace(self.path)
 
+    @staticmethod
+    def _excluded(user_id: int) -> bool:
+        return user_id == settings.owner_id
+
+    async def remove_user(self, user_id: int) -> bool:
+        """Remove profile/history data without touching the shared file cache."""
+        async with self._lock:
+            data = self._read()
+            removed = data.pop(str(user_id), None) is not None
+            if removed:
+                self._write(data)
+            return removed
+
     async def touch(self, user: User) -> dict[str, Any]:
+        if self._excluded(user.id):
+            return {"id": user.id, "banned": False, "successful_urls": []}
         async with self._lock:
             data = self._read()
             key = str(user.id)
@@ -70,29 +85,28 @@ class UserStore:
     ) -> None:
         async with self._lock:
             data = self._read()
-            record = data.setdefault(str(user_id), {
-                "id": user_id,
-                "banned": False,
-                "successful_urls": [],
-            })
-            history = record.setdefault("successful_urls", [])
             now = datetime.now(timezone.utc).isoformat()
-
-            existing = next((item for item in history if item.get("url") == url), None)
-            if existing:
-                existing["title"] = title
-                existing["last_downloaded_at"] = now
-                existing["download_count"] = int(existing.get("download_count", 1)) + 1
-            else:
-                history.append({
-                    "url": url,
-                    "title": title,
-                    "first_downloaded_at": now,
-                    "last_downloaded_at": now,
-                    "download_count": 1,
+            if not self._excluded(user_id):
+                record = data.setdefault(str(user_id), {
+                    "id": user_id,
+                    "banned": False,
+                    "successful_urls": [],
                 })
-
-            record["successful_urls"] = history[-200:]
+                history = record.setdefault("successful_urls", [])
+                existing = next((item for item in history if item.get("url") == url), None)
+                if existing:
+                    existing["title"] = title
+                    existing["last_downloaded_at"] = now
+                    existing["download_count"] = int(existing.get("download_count", 1)) + 1
+                else:
+                    history.append({
+                        "url": url,
+                        "title": title,
+                        "first_downloaded_at": now,
+                        "last_downloaded_at": now,
+                        "download_count": 1,
+                    })
+                record["successful_urls"] = history[-200:]
             if cache_key and file_id and file_kind:
                 cache = data.setdefault("_cache", {})
                 cache[cache_key] = {
@@ -102,9 +116,12 @@ class UserStore:
                     "url": url,
                     "updated_at": now,
                 }
-            self._write(data)
+            if not self._excluded(user_id) or (cache_key and file_id and file_kind):
+                self._write(data)
 
     async def set_banned(self, user_id: int, banned: bool) -> None:
+        if self._excluded(user_id):
+            return
         async with self._lock:
             data = self._read()
             record = data.setdefault(str(user_id), {
@@ -126,7 +143,11 @@ class UserStore:
                 if key.startswith("_") or not isinstance(record, dict):
                     continue
                 user_id = record.get("id")
-                if isinstance(user_id, int) and not record.get("banned"):
+                if (
+                    isinstance(user_id, int)
+                    and not self._excluded(user_id)
+                    and not record.get("banned")
+                ):
                     ids.append(user_id)
             return ids
 

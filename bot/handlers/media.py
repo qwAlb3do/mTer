@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import html
 from io import BytesIO
 import logging
 import mimetypes
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,11 +36,18 @@ from bot.handlers.common import registered
 from bot.local_bot_api import ensure_disk_space, local_file_path
 from bot.services.ytdlp_service import FormatOption, MediaInfo, PlaylistInfo, YTDLPService
 from bot.services.spotdl_service import SpotDLService
+from bot.services.website_capture import (
+    UnsafeWebsiteError,
+    capture_website,
+    validate_public_url,
+)
+from bot.services.platform_resolver import resolve_unsupported_media, uses_platform_resolver
 from bot.users import users
 from bot.utils import (
     extract_url,
     human_size,
     is_http_url,
+    is_known_media_url,
     is_likely_playlist_url,
     is_spotify_playlist_url,
     is_spotify_url,
@@ -130,9 +139,19 @@ def _cancel_keyboard(job_token: str) -> InlineKeyboardMarkup:
     ]])
 
 
-def _direct_file_keyboard(token: str) -> InlineKeyboardMarkup:
+def _direct_file_keyboard(token: str, info: DirectFileInfo) -> InlineKeyboardMarkup:
+    content_type = (info.content_type or "").lower()
+    label = "🖼 Download image" if content_type.startswith("image/") else "📥 Download file"
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📥 Download file", callback_data=f"direct:download:{token}")],
+        [InlineKeyboardButton(label, callback_data=f"direct:download:{token}")],
+        [InlineKeyboardButton("✖️ Close", callback_data=f"close:{token}")],
+    ])
+
+
+def _website_keyboard(token: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🌐 Capture webpage", callback_data=f"website:capture:{token}")],
+        [InlineKeyboardButton("🎬 Check for media", callback_data=f"website:media:{token}")],
         [InlineKeyboardButton("✖️ Close", callback_data=f"close:{token}")],
     ])
 
@@ -308,6 +327,18 @@ def _filename_from_headers(url: str, headers: httpx.Headers) -> str:
     return filename or "downloaded-file"
 
 
+def _safe_download_filename(filename: str, url: str, max_length: int = 120) -> str:
+    """Create a portable bounded filename while retaining a useful extension."""
+    original = Path(filename).name or "downloaded-file"
+    suffix = re.sub(r"[^A-Za-z0-9.]", "", Path(original).suffix)[:12]
+    stem = Path(original).stem
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", stem).strip("._-") or "downloaded-file"
+    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:10]
+    reserved = len(suffix) + len(digest) + 1
+    stem = stem[: max(1, max_length - reserved)]
+    return f"{stem}-{digest}{suffix}"
+
+
 def _content_length(headers: httpx.Headers) -> int | None:
     try:
         return int(headers.get("content-length") or "")
@@ -441,7 +472,8 @@ async def _render_media_panel(
     edit_message=None,
     back_playlist_token: str | None = None,
     playlist_item=None,
-) -> None:
+    show_errors: bool = True,
+) -> bool:
     try:
         info, spotify_url = await _inspect_url(url, playlist_item=playlist_item)
         token = token_urlsafe(6)
@@ -484,34 +516,95 @@ async def _render_media_panel(
                     parse_mode=ParseMode.HTML,
                     reply_markup=keyboard,
                 )
+        return True
     except DownloadError as exc:
-        logger.warning("Media inspection failed for %s: %s", url, exc)
-        detail = escape(str(exc))
-        if edit_message:
-            await _edit_panel_message(
-                edit_message,
-                f"<b>⚠️ Inspect failed</b>\n\n{detail}",
-                None,
-            )
-        elif status:
-            await _safe_edit_text(
-                status,
-                f"<b>⚠️ Inspect failed</b>\n\n{detail}",
-                parse_mode=ParseMode.HTML,
-            )
+        log = logger.warning if show_errors else logger.info
+        log("Media inspection failed for %s: %s", url, exc)
+        if show_errors:
+            detail = escape(str(exc))
+            if edit_message:
+                await _edit_panel_message(
+                    edit_message,
+                    f"<b>⚠️ Inspect failed</b>\n\n{detail}",
+                    None,
+                )
+            elif status:
+                await _safe_edit_text(
+                    status,
+                    f"<b>⚠️ Inspect failed</b>\n\n{detail}",
+                    parse_mode=ParseMode.HTML,
+                )
+        return False
     except asyncio.TimeoutError:
-        if edit_message:
-            await _edit_panel_message(
-                edit_message,
-                "<b>⚠️ Inspect timed out</b>\n\nPlease try again later.",
-                None,
-            )
-        elif status:
-            await _safe_edit_text(
-                status,
-                "<b>⚠️ Inspect timed out</b>\n\nPlease try again later.",
+        if show_errors:
+            if edit_message:
+                await _edit_panel_message(
+                    edit_message,
+                    "<b>⚠️ Inspect timed out</b>\n\nPlease try again later.",
+                    None,
+                )
+            elif status:
+                await _safe_edit_text(
+                    status,
+                    "<b>⚠️ Inspect timed out</b>\n\nPlease try again later.",
+                    parse_mode=ParseMode.HTML,
+                )
+        return False
+
+
+async def _send_website_capture(update: Update, url: str, status) -> None:
+    await _safe_edit_text(
+        status,
+        "<b>🛡 Checking website safety</b>\n\n"
+        "Validating the address before requesting the webpage…",
+        parse_mode=ParseMode.HTML,
+    )
+    try:
+        bundle = await asyncio.wait_for(capture_website(url), timeout=120.0)
+        caption = (
+            f"<b>📸 Website screenshot</b>\n"
+            f"Host: <code>{escape(bundle.hostname)}</code>\n"
+            f"URL: <code>{escape(bundle.final_url)}</code>"
+        )
+        if bundle.screenshot is not None:
+            await update.effective_message.reply_photo(
+                photo=bundle.screenshot,
+                caption=caption,
                 parse_mode=ParseMode.HTML,
             )
+        await update.effective_message.reply_document(
+            document=bundle.html_zip,
+            filename=bundle.html_zip.name,
+            caption=(
+                "<b>🗜 Webpage archive</b>\n"
+                "Contains <code>index.html</code>, same-origin static assets, and capture "
+                "metadata. Linked pages are not crawled. Treat downloaded webpage content "
+                "as untrusted."
+            ),
+            parse_mode=ParseMode.HTML,
+        )
+        await _safe_delete_message(status)
+    except UnsafeWebsiteError as exc:
+        await _safe_edit_text(
+            status,
+            f"<b>🚫 Website request blocked</b>\n\n{escape(exc)}",
+            parse_mode=ParseMode.HTML,
+        )
+    except httpx.HTTPError as exc:
+        logger.warning("Website capture failed for %s: %s", url, exc)
+        await _safe_edit_text(
+            status,
+            "<b>⚠️ Website request failed</b>\n\n"
+            "The public website did not respond successfully.",
+            parse_mode=ParseMode.HTML,
+        )
+    except asyncio.TimeoutError:
+        await _safe_edit_text(
+            status,
+            "<b>⚠️ Website capture timed out</b>\n\n"
+            "The page or its assets took longer than two minutes to archive.",
+            parse_mode=ParseMode.HTML,
+        )
 
 
 async def _show_playlist(
@@ -578,7 +671,7 @@ async def _download_direct_file(
         "title": info.filename,
     }
 
-    safe_name = Path(info.filename).name or "downloaded-file"
+    safe_name = _safe_download_filename(info.filename, info.url)
     cache_key = _direct_cache_key(info.url)
     cached = await users.get_cached_file(cache_key)
     if cached and await _send_cached_file(status, cached, html.escape(safe_name)[:900]):
@@ -725,6 +818,15 @@ async def _process_url(update: Update, context: ContextTypes.DEFAULT_TYPE, url: 
     try:
         await react_to_user(update, "url")
         status = await update.effective_message.reply_text("🔎 Extracting URL data…")
+        try:
+            await validate_public_url(url)
+        except UnsafeWebsiteError as exc:
+            await _safe_edit_text(
+                status,
+                f"<b>🚫 URL request blocked</b>\n\n{escape(exc)}",
+                parse_mode=ParseMode.HTML,
+            )
+            return
         await status.edit_text("🧾 Checking file type…")
         direct_file = await _inspect_direct_file(url)
         if direct_file:
@@ -737,7 +839,24 @@ async def _process_url(update: Update, context: ContextTypes.DEFAULT_TYPE, url: 
             await status.edit_text(
                 _direct_file_text(direct_file),
                 parse_mode=ParseMode.HTML,
-                reply_markup=_direct_file_keyboard(token),
+                reply_markup=_direct_file_keyboard(token, direct_file),
+            )
+            return
+
+        known_media = is_known_media_url(url)
+        if not known_media:
+            token = token_urlsafe(6)
+            context.bot_data.setdefault("website_sessions", {})[token] = {
+                "url": url,
+                "owner_id": update.effective_user.id,
+                "created": time.time(),
+            }
+            await status.edit_text(
+                "<b>🌐 Website detected</b>\n\n"
+                f"URL: <code>{escape(url)}</code>\n\n"
+                "Capture creates a screenshot and a ZIP containing the page and its safe public assets.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=_website_keyboard(token),
             )
             return
 
@@ -755,7 +874,20 @@ async def _process_url(update: Update, context: ContextTypes.DEFAULT_TYPE, url: 
                     return
                 logger.info("Playlist inspection failed; falling back to single item.", exc_info=True)
         await status.edit_text("🎚 Reading available formats…")
-        await _render_media_panel(update, context, url, status=status)
+        rendered = await _render_media_panel(
+            update,
+            context,
+            url,
+            status=status,
+            show_errors=known_media,
+        )
+        if not rendered:
+            await _safe_edit_text(
+                status,
+                "<b>⚠️ Media options unavailable</b>\n\n"
+                "This media URL could not be inspected. It may be private, expired, or unsupported.",
+                parse_mode=ParseMode.HTML,
+            )
     except TelegramError:
         logger.warning("Could not render URL workflow for %s", url, exc_info=True)
         raise
@@ -836,6 +968,77 @@ async def direct_file_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer("Starting download…")
     try:
         await _download_direct_file(update, context, session["info"], query.message)
+    finally:
+        await download_guard.release(user_id)
+
+
+@registered
+async def website_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    _, action, token = query.data.split(":", 2)
+    session = _get_session(context, "website_sessions", token)
+    if not _authorize_session(session, update.effective_user.id):
+        await query.answer("This website menu expired. Send the URL again.", show_alert=True)
+        return
+    if action not in {"capture", "media"}:
+        await query.answer()
+        return
+
+    user_id = update.effective_user.id
+    if not await _acquire_download_guard(query, user_id):
+        return
+    await query.answer("Capturing website…" if action == "capture" else "Checking for media…")
+    try:
+        if action == "capture":
+            await _send_website_capture(update, session["url"], query.message)
+            return
+        await _safe_edit_text(query.message, "🎬 Checking for downloadable media…")
+        candidate = None
+        try:
+            candidate = await resolve_unsupported_media(session["url"])
+        except (UnsafeWebsiteError, httpx.HTTPError):
+            logger.info("No explicit page media metadata found for %s", session["url"])
+        if candidate:
+            direct_file = await _inspect_direct_file(candidate)
+            if direct_file:
+                direct_token = token_urlsafe(6)
+                context.bot_data.setdefault("direct_file_sessions", {})[direct_token] = {
+                    "info": direct_file,
+                    "owner_id": user_id,
+                    "created": time.time(),
+                }
+                await _safe_edit_text(
+                    query.message,
+                    _direct_file_text(direct_file),
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=_direct_file_keyboard(direct_token, direct_file),
+                )
+                return
+        if uses_platform_resolver(session["url"]):
+            await _safe_edit_text(
+                query.message,
+                "<b>⚠️ Reddit media could not be resolved</b>\n\n"
+                "Reddit did not expose a usable public image or video URL for this post. "
+                "You can still capture the webpage.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=_website_keyboard(token),
+            )
+            return
+        rendered = await _render_media_panel(
+            update,
+            context,
+            candidate or session["url"],
+            edit_message=query.message,
+            show_errors=False,
+        )
+        if not rendered:
+            await _safe_edit_text(
+                query.message,
+                "<b>🌐 No downloadable media detected</b>\n\n"
+                "This appears to be an ordinary webpage. You can still capture its screenshot and page archive.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=_website_keyboard(token),
+            )
     finally:
         await download_guard.release(user_id)
 
@@ -1116,6 +1319,7 @@ async def playlist_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await query.answer("Starting playlist download…")
         await _download_playlist(update, context, token, session)
         return
+
     if action == "page":
         page = int(parts[3])
         session["page"] = page

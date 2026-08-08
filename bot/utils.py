@@ -32,6 +32,19 @@ def is_spotify_url(url: str) -> bool:
         return False
 
 
+def is_known_media_url(url: str) -> bool:
+    try:
+        host = (urlparse(url).hostname or "").lower().removeprefix("www.")
+    except ValueError:
+        return False
+    domains = (
+        "youtube.com", "youtu.be", "tiktok.com", "facebook.com", "fb.watch",
+        "instagram.com", "x.com", "twitter.com", "spotify.com", "pornhub.com",
+        "soundcloud.com", "vimeo.com", "twitch.tv",
+    )
+    return any(host == domain or host.endswith(f".{domain}") for domain in domains)
+
+
 def is_spotify_playlist_url(url: str) -> bool:
     try:
         parsed = urlparse(url)

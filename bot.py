@@ -31,6 +31,7 @@ from bot.handlers.common import (
     stat_command,
     start,
     stop_command,
+    testurl_command,
     unban_command,
 )
 from bot.handlers.media import (
@@ -43,6 +44,7 @@ from bot.handlers.media import (
     refresh_callback,
     retry_url_callback,
     url_command,
+    website_callback,
 )
 from bot.formatter import ascii_banner
 from bot.logging_config import configure_logging
@@ -54,9 +56,14 @@ from bot.handlers.tools import (
     search_command,
     wiki_command,
 )
+from bot.users import users
 
 
 async def post_init(application: Application) -> None:
+    if await users.remove_user(settings.owner_id):
+        logging.getLogger(__name__).info(
+            "Removed legacy owner profile/history from users storage."
+        )
     public_commands = [
         BotCommand("start", "Open the welcome menu"),
         BotCommand("help", "Open help"),
@@ -81,6 +88,7 @@ async def post_init(application: Application) -> None:
             BotCommand("resume", "Owner: leave maintenance mode"),
             BotCommand("ban", "Owner: ban a user"),
             BotCommand("unban", "Owner: unban a user"),
+            BotCommand("testurl", "Owner: save an admin test URL"),
         ], scope=BotCommandScopeChat(chat_id=settings.owner_id))
     except BadRequest as exc:
         logging.getLogger(__name__).warning(
@@ -127,11 +135,13 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("restart", restart_command))
     app.add_handler(CommandHandler("ban", ban_command))
     app.add_handler(CommandHandler("unban", unban_command))
+    app.add_handler(CommandHandler("testurl", testurl_command))
 
     app.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^menu:(help|info)$"))
     app.add_handler(CallbackQueryHandler(back_callback, pattern=r"^menu:back$"))
     app.add_handler(CallbackQueryHandler(download_callback, pattern=r"^dl:"))
     app.add_handler(CallbackQueryHandler(direct_file_callback, pattern=r"^direct:"))
+    app.add_handler(CallbackQueryHandler(website_callback, pattern=r"^website:"))
     app.add_handler(CallbackQueryHandler(cancel_callback, pattern=r"^cancel:"))
     app.add_handler(CallbackQueryHandler(refresh_callback, pattern=r"^refresh:"))
     app.add_handler(CallbackQueryHandler(retry_url_callback, pattern=r"^retry:url:"))

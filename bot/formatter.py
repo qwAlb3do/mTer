@@ -63,6 +63,7 @@ def help_panel(*, include_back: bool = False) -> Panel:
         "📚 Playlist links open a paginated panel.\n"
         "🎚 Media links show video/audio format buttons.\n\n"
         "<b>Downloads</b>\n"
+        "🧩 Each URL gets controls suited to its content type.\n"
         "✖️ Use Cancel while a download is running.\n"
         "⚡ Repeated completed URLs may resend from Telegram cache.\n"
         "🎵 Upload audio/video to analyze and find matching music.\n\n"
@@ -248,6 +249,18 @@ async def send_sticker(message: Message, kind: str, bot: Bot | None = None) -> N
     if chat_id is None:
         logger.warning("Could not determine chat_id for sticker fallback: %s", kind)
         return
+
+    # Some self-hosted Bot API instances reject otherwise valid reusable
+    # sticker IDs. Keep large media on the local server, but retry this tiny
+    # file-ID-only request through Telegram's hosted endpoint.
+    if sticker_id and settings.is_docker:
+        try:
+            await _send_sticker_via_hosted_api(chat_id, sticker_id)
+            logger.info("Sent %s sticker through hosted Bot API fallback", kind)
+            return
+        except TelegramError as exc:
+            logger.warning("Hosted Bot API sticker fallback failed for %s: %s", kind, exc)
+
     bot = bot or getattr(message, "bot", None) or getattr(message, "_bot", None)
     if bot is None:
         logger.warning("Could not find bot instance for sticker fallback: %s", kind)
@@ -263,6 +276,11 @@ async def send_sticker(message: Message, kind: str, bot: Bot | None = None) -> N
                 chat_id,
                 exc,
             )
+
+
+async def _send_sticker_via_hosted_api(chat_id: int, sticker_id: str) -> None:
+    async with Bot(token=settings.telegram_bot_token) as hosted_bot:
+        await hosted_bot.send_sticker(chat_id=chat_id, sticker=sticker_id)
 
 
 def ascii_banner() -> str:

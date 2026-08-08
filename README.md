@@ -6,6 +6,11 @@ A Docker-deployed Telegram bot named mTer for downloading media with yt-dlp,
 handling direct files and playlists, recognizing music, and uploading videos
 larger than the hosted Bot API's normal 50 MB upload limit.
 
+Each URL gets controls suited to its detected content: video and audio show
+available formats, direct files and images show a single relevant download
+action, playlists show playlist controls, and ordinary websites show a webpage
+capture action without irrelevant quality buttons.
+
 ## Architecture
 
 ```text
@@ -33,6 +38,11 @@ The Compose stack uses the community-maintained
 user data and logs use host folders. Active downloads appear in the host
 `downloads/` folder (mounted as `/shared/videos` in both containers) and are
 removed only after upload success or a handled failure.
+
+Warnings and errors are also recorded as structured entries in
+`database/errors.json`, including timestamps, source locations, messages, and
+available tracebacks. The file is capped at the newest 1,000 records and does
+not add user or owner profiles.
 
 ## Requirements
 
@@ -219,6 +229,16 @@ Public commands include `/start`, `/help`, `/info`, `/stat`, `/id`, `/url`,
 `/quote`, `/ss`, `/search`, `/wiki`, and `/ping`. Owner-only tools include
 `/jobs`, `/broadcast`, `/restart`, `/stop`, `/resume`, `/ban`, and `/unban`.
 
+When a submitted public HTTP(S) URL is not recognized as media, the bot checks
+it for SSRF and resource-abuse risks before requesting it. Local/private,
+reserved, link-local, credential-bearing, nonstandard-port, unsafe-redirect,
+oversized, and non-HTML targets are rejected. A safe webpage returns a
+screenshot when available and a bounded offline ZIP containing `index.html`,
+same-origin CSS, JavaScript, images, fonts and referenced media, plus
+`metadata.json` and `manifest.json`. Resource links are rewritten to captured
+files. Linked pages and cross-origin/CDN assets are not crawled; dynamic content
+created later by browser JavaScript may not be present.
+
 Under Docker, `/stop` enables persistent maintenance mode and cancels active
 jobs instead of exiting—the `unless-stopped` policy would immediately restart
 an exited process. Public tasks remain blocked across container restarts until
@@ -229,6 +249,10 @@ starts a fresh instance. To stop the container itself from Cloud Shell, use
 Sticker file IDs are maintained in `bot/config.py`, not `.env`. The bot sends
 only those configured stickers and logs Telegram rejections without generating
 replacement stickers.
+
+In Docker mode, if the self-hosted Bot API rejects a valid sticker ID, that
+sticker request alone falls back to Telegram's hosted Bot API. Media uploads
+continue through the local Bot API and retain large-file support.
 
 ## Logs and data
 
@@ -253,6 +277,11 @@ Storage:
 telegram-bot-api-data  local Bot API working state
 ```
 
+The configured owner ID is excluded from `users.json`: owner profile fields,
+activity timestamps, and successful-URL history are never collected. Any legacy
+owner record is removed at startup. Shared Telegram file-cache entries remain
+available because they are not associated with an owner profile.
+
 The generated per-job directory exists while yt-dlp downloads and merges the
 media, so `watch -n 1 'find downloads -maxdepth 2 -type f -ls'` shows `.part`,
 fragment, and final files in progress. Cleanup happens after Telegram delivery
@@ -271,9 +300,26 @@ RUN_ADMIN_URL_TESTS=1 docker compose --profile admin-tests run --rm admin-url-te
 ```
 
 Only an administrator should enable that command. It downloads every entry in
-`tests/url_list.json`, verifies a non-empty output, and cleans its test output.
-The file is gitignored so private test URLs are not committed. The requested
-admin URL suite has intentionally not been run during development.
+`tests/url_list.json` whose `enabled` field is `true`, verifies the requested
+media kind and a non-empty output, and cleans its test output. Each case has a
+unique `id`, `platform`, `url`, `format` (`fastest`, `video`, or `audio`), and
+optional `expected_kind`. Disabled placeholder cases may use a null URL. The
+file is gitignored so private test URLs are not committed. The requested admin
+URL suite has intentionally not been run during development.
+
+The owner does not need to edit JSON or discover technical IDs manually. Send
+one of these commands to the bot:
+
+```text
+/testurl https://example.com/video video
+/testurl https://example.com/audio audio
+/testurl https://example.com/media fastest
+```
+
+The bot detects the platform and content identifier, generates a unique case
+ID, and appends the enabled case to `tests/url_list.json`. Sending the same URL
+again updates its format instead of creating a duplicate. This command only
+edits the list; it never runs the download test.
 
 ## Verification
 

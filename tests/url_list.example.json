@@ -1,5 +1,22 @@
 {
-  "urls": [
-    "https://example.com/replace-with-an-admin-approved-media-url"
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "youtube-video",
+      "platform": "youtube",
+      "url": "https://example.com/replace-with-an-admin-approved-media-url",
+      "enabled": false,
+      "format": "video",
+      "expected_kind": "video",
+      "notes": "Replace the URL and set enabled to true."
+    },
+    {
+      "id": "audio-example",
+      "platform": "example",
+      "url": null,
+      "enabled": false,
+      "format": "audio",
+      "expected_kind": "audio"
+    }
   ]
 }

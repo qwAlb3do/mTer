@@ -5,6 +5,7 @@ import sys
 from logging.handlers import RotatingFileHandler
 
 from bot.config import settings
+from bot.error_store import JsonErrorHandler
 
 
 def configure_logging() -> None:
@@ -41,5 +42,9 @@ def configure_logging() -> None:
     error_handler.setLevel(logging.ERROR)
     error_handler.setFormatter(formatter)
     root_logger.addHandler(error_handler)
+
+    # Machine-readable diagnostic history for admin review. It contains event
+    # details and tracebacks, but is independent from users.json.
+    root_logger.addHandler(JsonErrorHandler(settings.errors_file))
 
     logging.getLogger("httpx").setLevel(logging.WARNING)
