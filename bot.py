@@ -27,6 +27,7 @@ from bot.handlers.common import (
     jobs_command,
     menu_callback,
     restart_command,
+    resume_command,
     stat_command,
     start,
     stop_command,
@@ -76,7 +77,10 @@ async def post_init(application: Application) -> None:
             BotCommand("jobs", "Owner: show active jobs"),
             BotCommand("broadcast", "Owner: message all users"),
             BotCommand("restart", "Owner: restart the bot"),
-            BotCommand("stop", "Stop the bot"),
+            BotCommand("stop", "Owner: enter maintenance mode"),
+            BotCommand("resume", "Owner: leave maintenance mode"),
+            BotCommand("ban", "Owner: ban a user"),
+            BotCommand("unban", "Owner: unban a user"),
         ], scope=BotCommandScopeChat(chat_id=settings.owner_id))
     except BadRequest as exc:
         logging.getLogger(__name__).warning(
@@ -110,6 +114,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("info", info_command))
     app.add_handler(CommandHandler("stat", stat_command))
     app.add_handler(CommandHandler("stop", stop_command))
+    app.add_handler(CommandHandler("resume", resume_command))
     app.add_handler(CommandHandler("id", id_command))
     app.add_handler(CommandHandler("url", url_command))
     app.add_handler(CommandHandler("quote", quote_command))

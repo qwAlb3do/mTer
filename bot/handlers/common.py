@@ -28,6 +28,21 @@ from bot.users import users
 logger = logging.getLogger(__name__)
 Handler = Callable[[Update, ContextTypes.DEFAULT_TYPE], Awaitable[None]]
 START_TIME = time.monotonic()
+MAINTENANCE_FILE = settings.users_file.parent / ".maintenance"
+
+
+def maintenance_enabled() -> bool:
+    return MAINTENANCE_FILE.is_file()
+
+
+def _cancel_active_jobs(context: ContextTypes.DEFAULT_TYPE) -> int:
+    cancelled = 0
+    for job in context.bot_data.get("download_jobs", {}).values():
+        event = job.get("event")
+        if event and not event.is_set():
+            event.set()
+            cancelled += 1
+    return cancelled
 
 
 def _user_is_owner(user) -> bool:
@@ -74,6 +89,18 @@ def registered(handler: Handler) -> Handler:
         if user.is_bot:
             if update.callback_query:
                 await update.callback_query.answer("Bots are blocked.", show_alert=True)
+            return
+        if maintenance_enabled() and user.id != settings.owner_id:
+            if update.callback_query:
+                await update.callback_query.answer(
+                    "The bot is temporarily stopped for maintenance.", show_alert=True
+                )
+            elif update.effective_message:
+                await update.effective_message.reply_text(
+                    "<b>🛑 Bot temporarily stopped</b>\n\n"
+                    "The owner has paused new tasks for maintenance. Please try again later.",
+                    parse_mode=ParseMode.HTML,
+                )
             return
         record = await users.touch(user)
         if record.get("banned") and user.id != settings.owner_id:
@@ -156,8 +183,10 @@ async def stat_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     direct_sessions = len(context.bot_data.get("direct_file_sessions", {}))
     jobs = len(context.bot_data.get("download_jobs", {}))
     active_downloads = await download_guard.active_count()
+    mode = "maintenance" if maintenance_enabled() else "online"
     await update.effective_message.reply_text(
         "<b>📊 Bot status</b>\n\n"
+        f"🚦 Mode: <code>{mode}</code>\n"
         f"⏱ Uptime: <code>{hours}h {minutes}m {seconds}s</code>\n"
         f"🎚 Media panels: <code>{media_sessions}</code>\n"
         f"📚 Playlist panels: <code>{playlist_sessions}</code>\n"
@@ -171,15 +200,46 @@ async def stat_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 @registered
 @owner_only
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.effective_message.reply_text("Stopping bot…")
-    context.application.stop_running()
+    cancelled = _cancel_active_jobs(context)
+    try:
+        MAINTENANCE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        MAINTENANCE_FILE.write_text("stopped by owner\n", encoding="utf-8")
+    except OSError:
+        logger.exception("Could not enable persistent maintenance mode")
+        await update.effective_message.reply_text(
+            "⚠️ Could not stop the bot because the maintenance marker could not be saved."
+        )
+        return
+    await update.effective_message.reply_text(
+        "<b>🛑 Bot stopped for maintenance</b>\n\n"
+        f"Cancelled jobs: <code>{cancelled}</code>\n"
+        "New public tasks are blocked. The Docker container remains healthy so "
+        "you can use <code>/resume</code> remotely.",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@registered
+@owner_only
+async def resume_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        MAINTENANCE_FILE.unlink(missing_ok=True)
+    except OSError:
+        logger.exception("Could not disable persistent maintenance mode")
+        await update.effective_message.reply_text("⚠️ Could not resume the bot.")
+        return
+    await update.effective_message.reply_text(
+        "<b>✅ Bot resumed</b>\n\nNew downloads and commands are available again.",
+        parse_mode=ParseMode.HTML,
+    )
 
 
 @registered
 @owner_only
 async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    cancelled = _cancel_active_jobs(context)
     await update.effective_message.reply_text(
-        "Restarting bot process… If the container restart policy is enabled, the service will come back up."
+        f"Restarting the bot container… Cancelled jobs: {cancelled}."
     )
     context.application.stop_running()
 

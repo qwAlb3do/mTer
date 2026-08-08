@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import importlib.util
+import tempfile
 import unittest
 from io import BytesIO
 from pathlib import Path
@@ -20,7 +22,7 @@ os.environ["LOG_DIR"] = "logs"
 from bot.formatter import ascii_banner, help_panel, id_lines, info_panel, send_sticker
 from bot.handlers.media import _send_video_with_fallback
 from bot.handlers.common import error_handler
-from bot.handlers import media, tools
+from bot.handlers import common, media, tools
 from bot.config import settings
 from bot.config import Settings
 from bot.errors import DownloadError
@@ -462,7 +464,44 @@ class CommandRegistrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("restart", public_commands)
         self.assertNotIn("stop", public_commands)
         self.assertIn("jobs", owner_commands)
+        self.assertIn("stop", owner_commands)
+        self.assertIn("resume", owner_commands)
+        self.assertIn("ban", owner_commands)
+        self.assertIn("unban", owner_commands)
         self.assertEqual(owner_call.kwargs["scope"].chat_id, 999)
+
+
+class DockerLifecycleCommandTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stop_enables_maintenance_and_cancels_jobs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / ".maintenance"
+            event = asyncio.Event()
+            message = SimpleNamespace(reply_text=AsyncMock())
+            update = SimpleNamespace(
+                effective_user=SimpleNamespace(id=settings.owner_id),
+                effective_message=message,
+            )
+            context = SimpleNamespace(bot_data={"download_jobs": {"job": {"event": event}}})
+            with patch.object(common, "MAINTENANCE_FILE", marker):
+                await common.stop_command.__wrapped__(update, context)
+
+            self.assertTrue(marker.is_file())
+            self.assertTrue(event.is_set())
+            self.assertIn("Bot stopped for maintenance", message.reply_text.await_args.args[0])
+
+    async def test_resume_removes_maintenance_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / ".maintenance"
+            marker.touch()
+            message = SimpleNamespace(reply_text=AsyncMock())
+            update = SimpleNamespace(
+                effective_user=SimpleNamespace(id=settings.owner_id),
+                effective_message=message,
+            )
+            with patch.object(common, "MAINTENANCE_FILE", marker):
+                await common.resume_command.__wrapped__(update, SimpleNamespace(bot_data={}))
+
+            self.assertFalse(marker.exists())
 
 
 class ErrorHandlerTests(unittest.IsolatedAsyncioTestCase):

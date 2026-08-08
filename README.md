@@ -207,7 +207,14 @@ without logging secrets.
 
 Public commands include `/start`, `/help`, `/info`, `/stat`, `/id`, `/url`,
 `/quote`, `/ss`, `/search`, `/wiki`, and `/ping`. Owner-only tools include
-`/jobs`, `/broadcast`, `/restart`, `/stop`, `/ban`, and `/unban`.
+`/jobs`, `/broadcast`, `/restart`, `/stop`, `/resume`, `/ban`, and `/unban`.
+
+Under Docker, `/stop` enables persistent maintenance mode and cancels active
+jobs instead of exiting—the `unless-stopped` policy would immediately restart
+an exited process. Public tasks remain blocked across container restarts until
+the owner sends `/resume`. `/restart` still exits the bot process so Docker
+starts a fresh instance. To stop the container itself from Cloud Shell, use
+`docker compose stop bot`.
 
 Sticker file IDs are maintained in `bot/config.py`, not `.env`. If Telegram
 rejects a configured ID, mTer uploads a locally generated WebP sticker instead.
