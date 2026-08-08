@@ -13,13 +13,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
+import httpx
+
+from bot.handlers.media import _inspect_direct_file
+from bot.services.platform_resolver import resolve_unsupported_media, uses_platform_resolver
+from bot.services.website_capture import capture_website, validate_public_url
 from bot.services.ytdlp_service import FormatOption, YTDLPService
+from bot.utils import is_known_media_url, is_likely_playlist_url
 
 
 URL_LIST = Path(__file__).with_name("url_list.json")
 ENABLED = os.getenv("RUN_ADMIN_URL_TESTS") == "1"
-VALID_FORMATS = {"fastest", "video", "audio"}
-VALID_KINDS = {"video", "audio"}
+VALID_FORMATS = {"auto", "fastest", "video", "audio", "image", "file", "website", "playlist"}
+VALID_KINDS = {"video", "audio", "image", "file", "website", "playlist"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,7 +86,7 @@ def load_cases(path: Path = URL_LIST) -> list[UrlCase]:
         url = item.get("url")
         if not _valid_http_url(url):
             raise AssertionError(f"{location}.url must be a valid HTTP(S) URL when enabled")
-        format_name = item.get("format", "fastest")
+        format_name = item.get("format", "auto")
         if format_name not in VALID_FORMATS:
             raise AssertionError(
                 f"{location}.format must be one of {sorted(VALID_FORMATS)}"
@@ -88,7 +94,7 @@ def load_cases(path: Path = URL_LIST) -> list[UrlCase]:
         expected_kind = item.get("expected_kind")
         if expected_kind is not None and expected_kind not in VALID_KINDS:
             raise AssertionError(
-                f"{location}.expected_kind must be video, audio, or null"
+                f"{location}.expected_kind must be one of {sorted(VALID_KINDS)} or null"
             )
         cases.append(UrlCase(
             id=case_id,
@@ -114,22 +120,73 @@ def select_format(formats: list[FormatOption], preference: str) -> FormatOption 
 
 @unittest.skipUnless(ENABLED, "admin-only downloads disabled (set RUN_ADMIN_URL_TESTS=1)")
 class AdminUrlDownloadTests(unittest.IsolatedAsyncioTestCase):
+    async def _media(self, service: YTDLPService, case: UrlCase, url: str, preference: str):
+        info = await service.inspect(url)
+        option = select_format(info.formats, preference)
+        self.assertIsNotNone(option, f"{case.id}: no {preference} format was reported")
+        result = await service.download(url, option, lambda _data: None)
+        try:
+            self.assertTrue(result.path.is_file(), f"{case.id}: output is missing")
+            self.assertGreater(result.path.stat().st_size, 0, f"{case.id}: output is empty")
+            if case.expected_kind in {"video", "audio"}:
+                self.assertEqual(result.kind, case.expected_kind)
+        finally:
+            service.cleanup(result)
+
+    async def _direct(self, case: UrlCase, url: str) -> None:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=120.0) as client:
+            async with client.stream("GET", url) as response:
+                response.raise_for_status()
+                size = 0
+                async for chunk in response.aiter_bytes():
+                    size += len(chunk)
+        self.assertGreater(size, 0, f"{case.id}: direct response is empty")
+
+    async def _run_case(self, service: YTDLPService, case: UrlCase) -> None:
+        await validate_public_url(case.url)
+        mode = case.format
+        resolved = (
+            await resolve_unsupported_media(case.url)
+            if uses_platform_resolver(case.url)
+            else None
+        )
+        effective_url = resolved or case.url
+
+        if mode == "website":
+            bundle = await capture_website(case.url)
+            self.assertGreater(len(bundle.html_zip.getvalue()), 0)
+            return
+        if mode in {"image", "file"}:
+            info = await _inspect_direct_file(effective_url)
+            self.assertIsNotNone(info, f"{case.id}: URL is not a direct file")
+            await self._direct(case, info.url)
+            return
+        if mode == "playlist":
+            playlist = await service.inspect_playlist(case.url)
+            self.assertIsNotNone(playlist, f"{case.id}: playlist metadata is missing")
+            self.assertTrue(playlist.items, f"{case.id}: playlist has no items")
+            await self._media(service, case, playlist.items[0].webpage_url, "fastest")
+            return
+        if mode in {"video", "audio", "fastest"}:
+            await self._media(service, case, effective_url, mode)
+            return
+
+        direct = await _inspect_direct_file(effective_url)
+        if direct:
+            await self._direct(case, direct.url)
+        elif is_likely_playlist_url(case.url):
+            playlist = await service.inspect_playlist(case.url)
+            self.assertIsNotNone(playlist, f"{case.id}: playlist metadata is missing")
+            self.assertTrue(playlist.items, f"{case.id}: playlist has no items")
+            await self._media(service, case, playlist.items[0].webpage_url, "fastest")
+        elif is_known_media_url(case.url):
+            await self._media(service, case, effective_url, "fastest")
+        else:
+            bundle = await capture_website(case.url)
+            self.assertGreater(len(bundle.html_zip.getvalue()), 0)
+
     async def test_every_enabled_case_downloads(self) -> None:
         service = YTDLPService()
         for case in load_cases():
             with self.subTest(id=case.id, platform=case.platform, url=case.url):
-                info = await service.inspect(case.url)
-                option = select_format(info.formats, case.format)
-                self.assertIsNotNone(
-                    option, f"{case.id}: no {case.format} format was reported"
-                )
-                result = await service.download(case.url, option, lambda _data: None)
-                try:
-                    self.assertTrue(result.path.is_file(), f"{case.id}: output is missing")
-                    self.assertGreater(
-                        result.path.stat().st_size, 0, f"{case.id}: output is empty"
-                    )
-                    if case.expected_kind:
-                        self.assertEqual(result.kind, case.expected_kind)
-                finally:
-                    service.cleanup(result)
+                await self._run_case(service, case)

@@ -12,6 +12,9 @@ from bot.config import settings
 
 _lock = asyncio.Lock()
 _SAFE_ID = re.compile(r"[^a-z0-9]+")
+VALID_TEST_MODES = {
+    "auto", "fastest", "video", "audio", "image", "file", "website", "playlist"
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,11 +85,13 @@ def _read_payload(path: Path) -> dict:
     return payload
 
 
-async def save_test_url(url: str, format_name: str = "video") -> SavedTestUrl:
-    if format_name not in {"fastest", "video", "audio"}:
-        raise ValueError("Format must be fastest, video, or audio.")
+async def save_test_url(url: str, format_name: str = "auto") -> SavedTestUrl:
+    if format_name not in VALID_TEST_MODES:
+        raise ValueError(f"Mode must be one of: {', '.join(sorted(VALID_TEST_MODES))}.")
     platform, suggested_id = describe_url(url)
-    expected_kind = format_name if format_name in {"video", "audio"} else None
+    expected_kind = format_name if format_name in {
+        "video", "audio", "image", "file", "website", "playlist"
+    } else None
     path = settings.url_test_list_file
 
     async with _lock:

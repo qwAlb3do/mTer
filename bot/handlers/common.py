@@ -24,7 +24,7 @@ from bot.formatter import (
     start_keyboard,
 )
 from bot.users import users
-from bot.test_url_store import save_test_url
+from bot.test_url_store import VALID_TEST_MODES, save_test_url
 from bot.utils import extract_url
 
 logger = logging.getLogger(__name__)
@@ -299,13 +299,13 @@ async def testurl_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     text = " ".join(context.args)
     url = extract_url(text)
     format_name = next(
-        (item.lower() for item in context.args if item.lower() in {"fastest", "video", "audio"}),
-        "video",
+        (item.lower() for item in context.args if item.lower() in VALID_TEST_MODES),
+        "auto",
     )
     if not url:
         await update.effective_message.reply_text(
             "<b>⚠️ Missing test URL</b>\n\n"
-            "Usage: <code>/testurl URL [video|audio|fastest]</code>",
+            "Usage: <code>/testurl URL [auto|video|audio|image|file|website|playlist]</code>",
             parse_mode=ParseMode.HTML,
         )
         return
@@ -323,7 +323,7 @@ async def testurl_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         f"<b>✅ {action} admin URL test case</b>\n\n"
         f"ID: <code>{escape(saved.case_id)}</code>\n"
         f"Platform: <code>{escape(saved.platform)}</code>\n"
-        f"Format: <code>{escape(saved.format)}</code>\n"
+        f"Mode: <code>{escape(saved.format)}</code>\n"
         f"File: <code>{escape(settings.url_test_list_file)}</code>\n\n"
         "The test was not run.",
         parse_mode=ParseMode.HTML,

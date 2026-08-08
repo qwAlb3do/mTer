@@ -301,9 +301,10 @@ RUN_ADMIN_URL_TESTS=1 docker compose --profile admin-tests run --rm admin-url-te
 
 Only an administrator should enable that command. It downloads every entry in
 `tests/url_list.json` whose `enabled` field is `true`, verifies the requested
-media kind and a non-empty output, and cleans its test output. Each case has a
-unique `id`, `platform`, `url`, `format` (`fastest`, `video`, or `audio`), and
-optional `expected_kind`. Disabled placeholder cases may use a null URL. The
+content kind and a non-empty output, and cleans its test output. Each case has a
+unique `id`, `platform`, `url`, and `format` mode (`auto`, `fastest`, `video`,
+`audio`, `image`, `file`, `website`, or `playlist`) plus an optional
+`expected_kind`. Disabled placeholder cases may use a null URL. The
 file is gitignored so private test URLs are not committed. The requested admin
 URL suite has intentionally not been run during development.
 
@@ -311,9 +312,12 @@ The owner does not need to edit JSON or discover technical IDs manually. Send
 one of these commands to the bot:
 
 ```text
+/testurl https://example.com
+/testurl https://example.com/photo.jpg image
+/testurl https://example.com/document.pdf file
+/testurl https://example.com/page website
+/testurl https://example.com/playlist playlist
 /testurl https://example.com/video video
-/testurl https://example.com/audio audio
-/testurl https://example.com/media fastest
 ```
 
 The bot detects the platform and content identifier, generates a unique case

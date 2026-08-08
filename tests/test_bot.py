@@ -507,6 +507,33 @@ class TestUrlStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(payload["cases"]), 1)
         self.assertEqual(payload["cases"][0]["format"], "audio")
 
+    async def test_save_test_url_accepts_ordinary_website_in_auto_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "url_list.json"
+            original = settings.url_test_list_file
+            settings.url_test_list_file = path
+            try:
+                saved = await save_test_url("https://example.com/docs/getting-started")
+            finally:
+                settings.url_test_list_file = original
+            payload = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertEqual(saved.format, "auto")
+        self.assertIsNone(saved.expected_kind)
+        self.assertEqual(payload["cases"][0]["format"], "auto")
+
+    async def test_save_test_url_accepts_non_media_modes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "url_list.json"
+            original = settings.url_test_list_file
+            settings.url_test_list_file = path
+            try:
+                for mode in ("image", "file", "website", "playlist"):
+                    saved = await save_test_url(f"https://example.com/{mode}", mode)
+                    self.assertEqual(saved.expected_kind, mode)
+            finally:
+                settings.url_test_list_file = original
+
 
 class UserPrivacyTests(unittest.IsolatedAsyncioTestCase):
     async def test_owner_touch_and_history_are_not_persisted(self) -> None:
