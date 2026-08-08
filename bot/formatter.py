@@ -3,15 +3,12 @@ from __future__ import annotations
 import html
 import logging
 import math
-from io import BytesIO
 from urllib.parse import quote_plus
 from dataclasses import dataclass
 from typing import Iterable
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Message, ReactionTypeEmoji, Update
 from telegram.error import TelegramError
-from PIL import Image, ImageDraw, ImageFont
-
 from bot.config import (
     DEFAULT_ANALYZING_STICKER_ID,
     DEFAULT_DOWNLOADING_STICKER_ID,
@@ -23,21 +20,13 @@ from bot.config import (
 
 logger = logging.getLogger(__name__)
 
-GENERATED_STICKER_STYLES = {
+STICKER_FALLBACKS = {
     "welcome": DEFAULT_WELCOME_STICKER_ID,
     "download": DEFAULT_DOWNLOADING_STICKER_ID,
     "music": DEFAULT_ANALYZING_STICKER_ID,
     "success": DEFAULT_SUCCESS_STICKER_ID,
     "error": DEFAULT_ERROR_STICKER_ID,
 }
-
-# GENERATED_STICKER_STYLES = {
-#     "welcome": ("WELCOME", "Ready for links", "#2563EB"),
-#     "download": ("DOWNLOADING", "Please wait", "#D97706"),
-#     "music": ("ANALYZING", "Finding the track", "#7C3AED"),
-#     "success": ("COMPLETE", "Transfer delivered", "#059669"),
-#     "error": ("FAILED", "Please try again", "#DC2626"),
-# }
 
 @dataclass(slots=True)
 class Panel:
@@ -268,43 +257,12 @@ async def send_sticker(message: Message, kind: str, bot: Bot | None = None) -> N
             await bot.send_sticker(chat_id=chat_id, sticker=sticker_id)
             return
         except TelegramError as exc:
-            logger.warning("Bot could not reuse configured sticker %s: %s", kind, exc)
-
-    try:
-        generated = _generated_sticker(kind)
-        await bot.send_sticker(chat_id=chat_id, sticker=generated)
-        logger.info("Sent generated fallback sticker for %s", kind)
-    except (OSError, TelegramError) as exc:
-        logger.warning("Could not send generated sticker %s to chat %s: %s", kind, chat_id, exc)
-
-
-def _generated_sticker(kind: str) -> BytesIO:
-    """Build a valid 512px WebP sticker without relying on bot-specific file IDs."""
-    title, subtitle, color = GENERATED_STICKER_STYLES.get(
-        kind, ("mTer", "Media downloader", "#334155")
-    )
-    image = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(image)
-    draw.rounded_rectangle((24, 80, 488, 432), radius=64, fill=color)
-    draw.rounded_rectangle((38, 94, 474, 418), radius=52, outline="white", width=5)
-    try:
-        title_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 54)
-        subtitle_font = ImageFont.truetype("DejaVuSans.ttf", 28)
-    except OSError:
-        title_font = subtitle_font = ImageFont.load_default()
-
-    def centered(text: str, y: int, font) -> None:
-        box = draw.textbbox((0, 0), text, font=font)
-        x = (512 - (box[2] - box[0])) // 2
-        draw.text((x, y), text, font=font, fill="white")
-
-    centered(title, 205, title_font)
-    centered(subtitle, 290, subtitle_font)
-    output = BytesIO()
-    output.name = f"mter-{kind}.webp"
-    image.save(output, format="WEBP", quality=90, method=6)
-    output.seek(0)
-    return output
+            logger.warning(
+                "Configured sticker %s could not be sent to chat %s: %s",
+                kind,
+                chat_id,
+                exc,
+            )
 
 
 def ascii_banner() -> str:

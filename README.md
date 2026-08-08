@@ -216,8 +216,9 @@ the owner sends `/resume`. `/restart` still exits the bot process so Docker
 starts a fresh instance. To stop the container itself from Cloud Shell, use
 `docker compose stop bot`.
 
-Sticker file IDs are maintained in `bot/config.py`, not `.env`. If Telegram
-rejects a configured ID, mTer uploads a locally generated WebP sticker instead.
+Sticker file IDs are maintained in `bot/config.py`, not `.env`. The bot sends
+only those configured stickers and logs Telegram rejections without generating
+replacement stickers.
 
 ## Logs and data
 

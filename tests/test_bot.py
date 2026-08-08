@@ -19,7 +19,7 @@ os.environ["USERS_FILE"] = "database/test-users.json"
 os.environ["DOWNLOAD_DIR"] = "downloads"
 os.environ["LOG_DIR"] = "logs"
 
-from bot.formatter import ascii_banner, help_panel, id_lines, info_panel, send_sticker
+from bot.formatter import STICKER_FALLBACKS, ascii_banner, help_panel, id_lines, info_panel, send_sticker
 from bot.handlers.media import _send_video_with_fallback
 from bot.handlers.common import error_handler
 from bot.handlers import common, media, tools
@@ -109,22 +109,20 @@ class TelegramDeliveryTests(unittest.IsolatedAsyncioTestCase):
 
         bot.send_sticker.assert_awaited_once()
 
-    async def test_invalid_file_id_falls_back_to_generated_webp(self) -> None:
+    async def test_invalid_file_id_does_not_send_generated_sticker(self) -> None:
         message = SimpleNamespace(
             reply_sticker=AsyncMock(side_effect=TelegramError("wrong file id")),
             chat=SimpleNamespace(id=123),
         )
-        bot = SimpleNamespace(
-            send_sticker=AsyncMock(side_effect=[TelegramError("wrong file id"), None])
-        )
+        bot = SimpleNamespace(send_sticker=AsyncMock(side_effect=TelegramError("wrong file id")))
 
         await send_sticker(message, "welcome", bot)
 
-        self.assertEqual(bot.send_sticker.await_count, 2)
-        generated = bot.send_sticker.await_args_list[1].kwargs["sticker"]
-        self.assertIsInstance(generated, BytesIO)
-        self.assertEqual(generated.name, "mter-welcome.webp")
-        self.assertGreater(len(generated.getvalue()), 100)
+        bot.send_sticker.assert_awaited_once()
+        self.assertEqual(
+            bot.send_sticker.await_args.kwargs["sticker"],
+            STICKER_FALLBACKS["welcome"],
+        )
 
     async def test_video_retries_without_thumbnail(self) -> None:
         sent = SimpleNamespace(video=SimpleNamespace(file_id="video-id"), document=None)
