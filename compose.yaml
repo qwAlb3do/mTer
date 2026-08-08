@@ -3,7 +3,7 @@ services:
     image: alpine:3.22
     command: sh -c 'mkdir -p /shared/videos /app/database /app/logs && chown -R ${BOT_UID:-1000}:${BOT_GID:-1000} /shared/videos /app/database /app/logs'
     volumes:
-      - ./shared/videos:/shared/videos
+      - ./downloads:/shared/videos
       - ./database:/app/database
       - ./logs:/app/logs
     restart: "no"
@@ -16,7 +16,7 @@ services:
       TELEGRAM_LOCAL: "1"
     volumes:
       - telegram-bot-api-data:/var/lib/telegram-bot-api
-      - ./shared/videos:/shared/videos:ro
+      - ./downloads:/shared/videos:ro
     networks:
       - bot-network
     depends_on:
@@ -49,7 +49,7 @@ services:
       YTDLP_COOKIES_FILE: /run/secrets/youtube-cookies.txt
       YTDLP_JS_RUNTIMES: node:/usr/bin/node
     volumes:
-      - ./shared/videos:/shared/videos
+      - ./downloads:/shared/videos
       - ./database:/app/database
       - ./logs:/app/logs
       - telegram-bot-api-data:/var/lib/telegram-bot-api:ro
@@ -62,6 +62,24 @@ services:
       telegram-bot-api:
         condition: service_healthy
     restart: unless-stopped
+
+  admin-url-tests:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: admin-tests
+    profiles: ["admin-tests"]
+    user: "${BOT_UID:-1000}:${BOT_GID:-1000}"
+    env_file:
+      - .env
+    environment:
+      DOWNLOAD_DIR: /shared/videos/admin-tests
+      RUN_ADMIN_URL_TESTS: "${RUN_ADMIN_URL_TESTS:-0}"
+    volumes:
+      - ./downloads:/shared/videos
+      - ./tests/url_list.json:/app/tests/url_list.json:ro
+      - ./secrets:/run/secrets:ro
+    command: ["python", "-m", "unittest", "-v", "tests.test_url_downloads"]
 
 networks:
   bot-network:

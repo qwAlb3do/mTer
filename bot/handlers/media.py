@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+from io import BytesIO
 import logging
 import mimetypes
 import time
@@ -154,8 +155,55 @@ async def _reply_photo_or_text(message, *, photo: str | None, text: str, **kwarg
                 **kwargs,
             )
         except TelegramError as exc:
-            logger.info("Could not send remote thumbnail; falling back to text panel: %s", exc)
+            logger.info("Telegram could not fetch remote thumbnail; uploading it directly: %s", exc)
+        try:
+            async with httpx.AsyncClient(follow_redirects=True, timeout=20.0) as client:
+                response = await client.get(photo)
+                response.raise_for_status()
+                content_type = response.headers.get("content-type", "")
+                if not content_type.startswith("image/"):
+                    raise ValueError(f"unexpected thumbnail content type: {content_type}")
+                if len(response.content) > 10 * 1024 * 1024:
+                    raise ValueError("thumbnail is larger than 10 MiB")
+                image = BytesIO(response.content)
+                image.name = "thumbnail.jpg"
+                return await message.reply_photo(photo=image, caption=text, **kwargs)
+        except (httpx.HTTPError, TelegramError, ValueError) as exc:
+            logger.info("Could not upload thumbnail; falling back to text panel: %s", exc)
     return await message.reply_text(text, **kwargs)
+
+
+async def _send_video_with_fallback(message, *, path: str, filename: str, caption: str,
+                                    duration: int | None, height: int | None,
+                                    thumbnail: str | None):
+    """Retry without an optional thumbnail, then preserve delivery as a document."""
+    common = {
+        "filename": filename,
+        "caption": caption,
+        "duration": duration,
+        "height": height,
+        "supports_streaming": True,
+        "read_timeout": settings.telegram_read_timeout,
+        "write_timeout": settings.telegram_write_timeout,
+    }
+    try:
+        return await message.reply_video(video=path, thumbnail=thumbnail, **common)
+    except TelegramError as first_error:
+        if thumbnail:
+            logger.warning("Video upload with thumbnail failed; retrying without it: %s", first_error)
+            try:
+                return await message.reply_video(video=path, thumbnail=None, **common)
+            except TelegramError as retry_error:
+                logger.warning("Video retry failed; sending as document: %s", retry_error)
+        else:
+            logger.warning("Video upload failed; sending as document: %s", first_error)
+        return await message.reply_document(
+            document=path,
+            filename=filename,
+            caption=caption,
+            read_timeout=settings.telegram_read_timeout,
+            write_timeout=settings.telegram_write_timeout,
+        )
 
 
 def _direct_file_text(info: DirectFileInfo) -> str:
@@ -867,33 +915,34 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 if result.thumbnail is not None
                 else None
             )
-            sent = await query.message.reply_video(
-                video=upload_path,
+            sent = await _send_video_with_fallback(
+                query.message,
+                path=upload_path,
                 filename=result.path.name,
                 caption=html.escape(result.title)[:900],
                 duration=info.duration,
                 height=option.height,
-                supports_streaming=True,
                 thumbnail=thumbnail_path,
-                read_timeout=settings.telegram_read_timeout,
-                write_timeout=settings.telegram_write_timeout,
             )
         logger.info("Telegram upload succeeded: %s", result.path)
         file_id = None
         if result.kind == "audio" and sent.audio:
             file_id = sent.audio.file_id
-        elif result.kind == "video" and sent.video:
-            file_id = sent.video.file_id
+        elif result.kind == "video":
+            if sent.video:
+                file_id = sent.video.file_id
+            elif sent.document:
+                file_id = sent.document.file_id
         await users.add_success(
             update.effective_user.id,
             session["url"],
             result.title,
             cache_key=cache_key,
             file_id=file_id,
-            file_kind=result.kind,
+            file_kind=("document" if result.kind == "video" and sent.document else result.kind),
         )
         await react_to_user(update, "success")
-        await send_sticker(query.message, "success")
+        await send_sticker(query.message, "success", context.bot)
         await _safe_delete_message(progress_message)
     except DownloadCancelled:
         await progress_message.edit_text("🛑 Download cancelled.")
@@ -917,7 +966,7 @@ async def download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     except TelegramError:
         logger.warning("Media Telegram upload failed: %s", session["url"], exc_info=True)
         try:
-            await send_sticker(query.message, "error")
+            await send_sticker(query.message, "error", context.bot)
             await _safe_edit_text(
                 progress_message,
                 "<b>⚠️ Upload failed</b>\n\nThe media downloaded, but Telegram could not receive it.",

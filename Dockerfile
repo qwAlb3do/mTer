@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.12-slim AS bot
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -25,3 +25,7 @@ COPY --chown=bot:bot bot.py ./bot.py
 USER bot
 
 CMD ["python", "bot.py"]
+
+FROM bot AS admin-tests
+
+COPY --chown=bot:bot tests ./tests

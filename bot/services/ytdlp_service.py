@@ -100,7 +100,10 @@ class YTDLPService:
             "windowsfilenames": True,
             "retries": 3,
             "fragment_retries": 3,
+            "file_access_retries": 3,
             "socket_timeout": 30,
+            "continuedl": True,
+            "part": True,
         }
         if js_runtimes := self._js_runtimes():
             options["js_runtimes"] = js_runtimes
@@ -475,7 +478,11 @@ class YTDLPService:
         require_ffmpeg()
         job_dir = settings.download_dir / uuid4().hex
         job_dir.mkdir(parents=True, exist_ok=True)
-        logger.info("Created media job directory: %s", job_dir)
+        logger.info(
+            "Created visible media job directory: %s (host: downloads/%s)",
+            job_dir,
+            job_dir.name,
+        )
         opts = self._base(job_dir)
         def checked_progress(data: dict[str, Any]) -> None:
             if cancel_callback and cancel_callback():

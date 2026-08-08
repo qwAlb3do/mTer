@@ -1,5 +1,7 @@
 # mTer
 
+![mTer Telegram bot preview](preview.jpg)
+
 A Docker-deployed Telegram bot named mTer for downloading media with yt-dlp,
 handling direct files and playlists, recognizing music, and uploading videos
 larger than the hosted Bot API's normal 50 MB upload limit.
@@ -17,8 +19,8 @@ Telegram
 ```
 
 The services use a private Compose network; the Bot API port is not published
-to the host or internet. Both containers mount the same `shared-videos` volume
-at the identical `/shared/videos` path. The Python client runs in local mode
+to the host or internet. Both containers bind-mount the host `downloads/`
+directory at the identical `/shared/videos` path. The Python client runs in local mode
 and sends an absolute path, allowing the Bot API service to read large files
 directly without loading them fully into Python memory.
 
@@ -27,9 +29,10 @@ preserves the existing music-recognition flow when local-mode `getFile`
 responses contain absolute paths owned by the Bot API service.
 
 The Compose stack uses the community-maintained
-`aiogram/telegram-bot-api:10.0` image. Bot API state, user data, and logs are stored
-in separate named volumes. Download cleanup only touches temporary job files
-inside `shared-videos`.
+`aiogram/telegram-bot-api:10.0` image. Bot API state is stored in a named volume;
+user data and logs use host folders. Active downloads appear in the host
+`downloads/` folder (mounted as `/shared/videos` in both containers) and are
+removed only after upload success or a handled failure.
 
 ## Requirements
 
@@ -118,6 +121,11 @@ Docker host has sufficient disk space. FFmpeg and Node.js are installed in the
 bot image. Upload and download timeouts are intentionally longer for large
 media.
 
+Video delivery first uses Telegram's video endpoint. If Telegram rejects the
+generated thumbnail, the bot retries without it; if video delivery still fails,
+it sends the same file as a document. Metadata thumbnails are also downloaded
+and uploaded by the bot when Telegram cannot fetch their remote URL.
+
 Temporary output and fragments are removed after successful uploads and after
 handled failures or cancellations. Database and log volumes are separate and
 are not deleted by media cleanup.
@@ -193,16 +201,39 @@ Public commands include `/start`, `/help`, `/info`, `/stat`, `/id`, `/url`,
 docker compose logs -f bot
 docker compose logs -f telegram-bot-api
 docker compose exec bot ls -la /shared/videos
+ls -la downloads
 ```
 
-Named volumes:
+Storage:
 
 ```text
-shared-videos          temporary downloads visible to both services
-bot-database           user history and cached Telegram file IDs
-bot-logs               bot logs
+./downloads            temporary downloads visible on the Cloud Shell host
+./database             user history and cached Telegram file IDs
+./logs                 bot logs
 telegram-bot-api-data  local Bot API working state
 ```
+
+The generated per-job directory exists while yt-dlp downloads and merges the
+media, so `watch -n 1 'find downloads -maxdepth 2 -type f -ls'` shows `.part`,
+fragment, and final files in progress. Cleanup happens after Telegram delivery
+finishes or the job fails/cancels.
+
+## Admin-only URL download tests
+
+The network test suite is disabled by default and is not part of normal bot
+startup. It must be run from its Docker Compose profile; do not run it with host
+Python.
+
+```bash
+cp tests/url_list.example.json tests/url_list.json
+nano tests/url_list.json
+RUN_ADMIN_URL_TESTS=1 docker compose --profile admin-tests run --rm admin-url-tests
+```
+
+Only an administrator should enable that command. It downloads every entry in
+`tests/url_list.json`, verifies a non-empty output, and cleans its test output.
+The file is gitignored so private test URLs are not committed. The requested
+admin URL suite has intentionally not been run during development.
 
 ## Verification
 

@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from telegram.error import Conflict
+from telegram.error import Conflict, TelegramError
 
 
 os.environ["TELEGRAM_BOT_TOKEN"] = "123456:test-token"
@@ -17,7 +17,8 @@ os.environ["USERS_FILE"] = "database/test-users.json"
 os.environ["DOWNLOAD_DIR"] = "downloads"
 os.environ["LOG_DIR"] = "logs"
 
-from bot.formatter import ascii_banner, help_panel, id_lines, info_panel
+from bot.formatter import ascii_banner, help_panel, id_lines, info_panel, send_sticker
+from bot.handlers.media import _send_video_with_fallback
 from bot.handlers.common import error_handler
 from bot.handlers import tools
 from bot.config import settings
@@ -92,6 +93,36 @@ class FormatterTests(unittest.TestCase):
         self.assertIn("<b>↩️ Replied message</b>", text)
         self.assertIn("Sticker ID: <code>sticker-file-id</code>", text)
         self.assertIn("Photo ID: <code>big-photo</code>", text)
+
+
+class TelegramDeliveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_sticker_falls_back_to_explicit_bot(self) -> None:
+        message = SimpleNamespace(
+            reply_sticker=AsyncMock(side_effect=TelegramError("reply failed")),
+            chat=SimpleNamespace(id=123),
+        )
+        bot = SimpleNamespace(send_sticker=AsyncMock())
+
+        await send_sticker(message, "success", bot)
+
+        bot.send_sticker.assert_awaited_once()
+
+    async def test_video_retries_without_thumbnail(self) -> None:
+        sent = SimpleNamespace(video=SimpleNamespace(file_id="video-id"), document=None)
+        message = SimpleNamespace(
+            reply_video=AsyncMock(side_effect=[TelegramError("bad thumb"), sent]),
+            reply_document=AsyncMock(),
+        )
+
+        result = await _send_video_with_fallback(
+            message, path="/shared/videos/video.mp4", filename="video.mp4",
+            caption="video", duration=10, height=720, thumbnail="/shared/videos/thumb.jpg",
+        )
+
+        self.assertIs(result, sent)
+        self.assertEqual(message.reply_video.await_count, 2)
+        self.assertIsNone(message.reply_video.await_args_list[1].kwargs["thumbnail"])
+        message.reply_document.assert_not_awaited()
 
 
 class UrlClassificationTests(unittest.TestCase):
