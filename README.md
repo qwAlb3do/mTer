@@ -45,6 +45,16 @@ removed only after upload success or a handled failure.
 No host Python, CMake, TDLib source build, or manually compiled Bot API binary
 is required.
 
+When `python3 bot.py` is used for local development, `RUNTIME_MODE=local`
+ignores Docker-only filesystem paths from `.env`. Writable data stays under
+this repository in `downloads/`, `database/`, `logs/`, and `.runtime/`; cookie
+input is read from `secrets/`. Compose overrides the mode to `docker` and uses
+the mounted container paths documented below.
+
+Local mode uses Telegram's hosted Bot API, uploads files as multipart data, and
+caps output at 50 MB. Docker mode uses the shared local Bot API and supports the
+larger configured upload limit.
+
 ## Setup
 
 ```bash
@@ -228,6 +238,11 @@ docker compose logs -f telegram-bot-api
 docker compose exec bot ls -la /shared/videos
 ls -la downloads
 ```
+
+Bot events are written to stdout and the rotating files simultaneously. They
+therefore appear directly with `python3 bot.py`, through
+`docker compose logs -f bot`, and in `logs/bot.log`. Errors are additionally
+written to `logs/errors.log`.
 
 Storage:
 

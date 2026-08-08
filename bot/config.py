@@ -6,6 +6,7 @@ from typing import Annotated
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # Easy-edit defaults. Values in .env still override these at runtime.
 DOWNLOAD_DIR = "downloads"
@@ -37,6 +38,7 @@ CsvList = Annotated[list[str], NoDecode]
 class Settings(BaseSettings):
     telegram_bot_token: str = Field(alias="TELEGRAM_BOT_TOKEN")
     owner_id: int = Field(alias="OWNER_ID")
+    runtime_mode: str = Field(default="local", alias="RUNTIME_MODE")
 
     welcome_sticker_id: str | None = Field(default=DEFAULT_WELCOME_STICKER_ID, alias="WELCOME_STICKER_ID")
     welcome_reaction: str = Field(default=DEFAULT_WELCOME_REACTION, alias="WELCOME_REACTION")
@@ -141,11 +143,25 @@ class Settings(BaseSettings):
         return None if value in (None, "") else value
 
     @property
+    def is_docker(self) -> bool:
+        return self.runtime_mode.strip().lower() == "docker"
+
+    @property
+    def cookie_work_file(self) -> Path:
+        if self.is_docker:
+            return Path("/tmp/telegram-bot-ytdlp/youtube-cookies.txt")
+        return PROJECT_ROOT / ".runtime" / "youtube-cookies.txt"
+
+    @property
     def telegram_api_base_url(self) -> str:
+        if not self.is_docker:
+            return "https://api.telegram.org/bot"
         return self.telegram_base_url or f"{self.telegram_bot_api_url.rstrip('/')}/bot"
 
     @property
     def telegram_api_base_file_url(self) -> str:
+        if not self.is_docker:
+            return "https://api.telegram.org/file/bot"
         return (
             self.telegram_base_file_url
             or f"{self.telegram_bot_api_url.rstrip('/')}/file/bot"
@@ -167,6 +183,24 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# Values such as /shared/videos and /app/logs belong only to Compose. A local
+# Python process always keeps every writable path inside this repository even
+# when it reads a Docker-oriented .env file.
+if not settings.is_docker:
+    settings.download_dir = PROJECT_ROOT / "downloads"
+    settings.log_dir = PROJECT_ROOT / "logs"
+    settings.users_file = PROJECT_ROOT / "database" / "users.json"
+    settings.max_upload_bytes = min(settings.max_upload_bytes, 50_000_000)
+    if settings.ytdlp_cookie_file is not None:
+        local_cookie = PROJECT_ROOT / "secrets" / settings.ytdlp_cookie_file.name
+        settings.ytdlp_cookie_file = (
+            local_cookie
+            if local_cookie.is_file() and local_cookie.stat().st_size > 0
+            else None
+        )
+
 settings.download_dir.mkdir(parents=True, exist_ok=True)
 settings.log_dir.mkdir(parents=True, exist_ok=True)
 settings.users_file.parent.mkdir(parents=True, exist_ok=True)
+settings.cookie_work_file.parent.mkdir(parents=True, exist_ok=True)

@@ -40,6 +40,7 @@ services:
     env_file:
       - .env
     environment:
+      RUNTIME_MODE: docker
       TELEGRAM_BOT_API_URL: http://telegram-bot-api:8081
       TELEGRAM_BASE_URL: http://telegram-bot-api:8081/bot
       TELEGRAM_BASE_FILE_URL: http://telegram-bot-api:8081/file/bot
@@ -73,6 +74,7 @@ services:
     env_file:
       - .env
     environment:
+      RUNTIME_MODE: docker
       DOWNLOAD_DIR: /shared/videos/admin-tests
       RUN_ADMIN_URL_TESTS: "${RUN_ADMIN_URL_TESTS:-0}"
     volumes:

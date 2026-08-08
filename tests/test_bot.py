@@ -344,7 +344,7 @@ class YTDLPServiceTests(unittest.TestCase):
 
 
 class SettingsTests(unittest.TestCase):
-    def test_local_bot_api_is_the_default_upload_endpoint(self) -> None:
+    def test_local_runtime_uses_hosted_bot_api(self) -> None:
         loaded = Settings(
             TELEGRAM_BOT_TOKEN="123456:test-token",
             OWNER_ID=999,
@@ -352,9 +352,18 @@ class SettingsTests(unittest.TestCase):
         )
         self.assertEqual(
             loaded.telegram_api_base_url,
-            "http://telegram-bot-api:8081/bot",
+            "https://api.telegram.org/bot",
         )
         self.assertEqual(loaded.max_upload_bytes, 2_000_000_000)
+
+    def test_docker_runtime_uses_local_bot_api(self) -> None:
+        loaded = Settings(
+            TELEGRAM_BOT_TOKEN="123456:test-token",
+            OWNER_ID=999,
+            RUNTIME_MODE="docker",
+            _env_file=None,
+        )
+        self.assertEqual(loaded.telegram_api_base_url, "http://telegram-bot-api:8081/bot")
 
     def test_comma_separated_list_values_load_from_env_file(self) -> None:
         env_file = Path("database/test-settings.env")
@@ -398,11 +407,11 @@ class SystemDependencyTests(unittest.TestCase):
 
 
 class LocalBotApiUploadTests(unittest.TestCase):
-    def test_upload_uses_an_absolute_path_without_reading_file(self) -> None:
+    def test_local_runtime_upload_uses_a_path_for_multipart(self) -> None:
         path = Path("downloads/local-upload-test.bin")
         path.write_bytes(b"test")
         try:
-            self.assertEqual(local_file_path(path), str(path.resolve()))
+            self.assertEqual(local_file_path(path), path.resolve())
         finally:
             path.unlink(missing_ok=True)
 
@@ -431,13 +440,13 @@ class CommandRegistrationTests(unittest.IsolatedAsyncioTestCase):
 
         request.assert_called_once()
 
-    async def test_application_uses_python_telegram_bot_local_mode(self) -> None:
+    async def test_local_application_uses_hosted_telegram_api(self) -> None:
         bot_entry = _load_bot_entrypoint()
         application = bot_entry.build_application()
-        self.assertTrue(application.bot.local_mode)
+        self.assertFalse(application.bot.local_mode)
         self.assertTrue(
             str(application.bot.base_url).startswith(
-                "http://telegram-bot-api:8081/bot"
+                "https://api.telegram.org/bot"
             )
         )
 

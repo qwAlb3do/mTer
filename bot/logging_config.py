@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 from logging.handlers import RotatingFileHandler
 
 from bot.config import settings
@@ -14,6 +15,13 @@ def configure_logging() -> None:
     root_logger = logging.getLogger()
     root_logger.setLevel(getattr(logging, settings.log_level.upper(), logging.INFO))
     root_logger.handlers.clear()
+
+    # stdout is captured by both an interactive terminal and Docker's logging
+    # driver, making the same runtime events visible through `python3 bot.py`
+    # and `docker compose logs -f bot`.
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(formatter)
+    root_logger.addHandler(console_handler)
 
     file_handler = RotatingFileHandler(
         settings.log_dir / "bot.log",

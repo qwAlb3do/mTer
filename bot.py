@@ -93,7 +93,7 @@ def build_application() -> Application:
     builder = (
         ApplicationBuilder()
         .token(settings.telegram_bot_token)
-        .local_mode(True)
+        .local_mode(settings.is_docker)
         .connect_timeout(settings.telegram_connect_timeout)
         .read_timeout(settings.telegram_read_timeout)
         .write_timeout(settings.telegram_write_timeout)
@@ -186,7 +186,12 @@ def main() -> None:
     configure_logging()
     logging.getLogger(__name__).info(ascii_banner())
     try:
-        wait_for_local_bot_api()
+        if settings.is_docker:
+            wait_for_local_bot_api()
+        else:
+            logging.getLogger(__name__).info(
+                "Local runtime: using Telegram hosted Bot API and repository storage."
+            )
         build_application().run_polling(
             timeout=settings.telegram_get_updates_timeout,
             bootstrap_retries=settings.telegram_bootstrap_retries,

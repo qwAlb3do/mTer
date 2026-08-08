@@ -10,15 +10,15 @@ from bot.errors import DownloadError
 logger = logging.getLogger(__name__)
 
 
-def local_file_path(path: Path) -> str:
-    """Return a path the local Bot API server can read without multipart upload."""
+def local_file_path(path: Path) -> str | Path:
+    """Prepare a file for local-path delivery in Docker or multipart locally."""
     try:
         resolved = path.resolve(strict=True)
     except FileNotFoundError as exc:
         raise DownloadError(f"Upload file does not exist: {path}") from exc
     if not resolved.is_file():
         raise DownloadError(f"Upload file does not exist: {resolved}")
-    return str(resolved)
+    return str(resolved) if settings.is_docker else resolved
 
 
 def ensure_disk_space(required_bytes: int = 0) -> None:

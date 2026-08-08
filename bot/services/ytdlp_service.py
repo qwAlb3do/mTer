@@ -78,7 +78,7 @@ class DownloadResult:
 class YTDLPService:
     def __init__(self) -> None:
         self._semaphore = asyncio.Semaphore(settings.max_concurrent_downloads)
-        self._cookie_work_file = Path("/tmp/telegram-bot-ytdlp/youtube-cookies.txt")
+        self._cookie_work_file = settings.cookie_work_file
 
     @staticmethod
     def _js_runtimes() -> dict[str, dict[str, str]] | None:

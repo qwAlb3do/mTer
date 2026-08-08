@@ -278,7 +278,7 @@ def ascii_banner() -> str:
         mTer is online.
         Downloads, playlists, screenshots, search, and music tools are ready.
         -$ status -> alive!
-        -$ logs   -> logs/bot.log
+        -$ logs   -> logs/
       
 """
 
